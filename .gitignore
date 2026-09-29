@@ -17,6 +17,10 @@
 mono_crash.*
 
 # Build results
+build/
+release/
+*.nrwgt
+nvngx_dlssnr.dll
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/

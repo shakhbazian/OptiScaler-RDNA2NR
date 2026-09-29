@@ -6,6 +6,8 @@
 #include "IFeature_Dx12.h"
 #include "State.h"
 #include <dlssnr/DlssNr_Pipeline_Dx12.h>
+#include <dlssnr/NrBackendSelection.h>
+#include <dlssnr/native/NativeAdapter.h>
 
 void IFeature_Dx12::ResourceBarrier(ID3D12GraphicsCommandList* InCommandList, ID3D12Resource* InResource,
                                     D3D12_RESOURCE_STATES InBeforeState, D3D12_RESOURCE_STATES InAfterState) const
@@ -57,6 +59,17 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
     {
         LOG_ERROR("Not inited!");
         return false;
+    }
+
+    // Feature identity belongs to the active game evaluation, including FSR/XeSS shims.
+    // Native recording uses it to avoid carrying temporal history across a new feature.
+    std::optional<DlssNr::Native::EvaluationScope> hipScope;
+    if (Config::Instance()->DlssNrEnabled.value_or_default() &&
+        DlssNr::SelectNrBackend(Device, Config::Instance()->DlssNrBackend.value_or_default()) ==
+            DlssNr::NrBackendSelection::AmdHip)
+    {
+        DlssNr::Native::Initialize(Device);
+        hipScope.emplace(Handle()->Id, IsHdr());
     }
 
     if (!NeuralRendering && Config::Instance()->DlssNrEnabled.value_or_default())
@@ -382,6 +395,8 @@ IFeature_Dx12::~IFeature_Dx12()
         UpscalerTime.release();
         return;
     }
+
+    DlssNr::Native::ReleaseFeature(Handle()->Id);
 
     Imgui.reset();
     OutputScaler.reset();

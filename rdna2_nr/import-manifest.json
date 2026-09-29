@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 1,
+  "files": [
+    {
+      "path": "include/attention_probe_support.h",
+      "sha256": "db43c20545ae3f0555456c682e95c7d3a5cfc8b17f621494f785d9b889296db2"
+    },
+    {
+      "path": "include/e4m3fn.h",
+      "sha256": "a0cf1322a7f290dac5c054723a210a455b154a3118ca30816a37853929243458"
+    },
+    {
+      "path": "include/ffn_candidate.h",
+      "sha256": "22dc531da001e62a7ddac825488f198f568228c881131c3123a3773335f44035"
+    },
+    {
+      "path": "include/nr_async_protocol.h",
+      "sha256": "3fe0cabc75077098d4b3d0385661858a088b18b2bc77b1d6f359b37345944bdc"
+    },
+    {
+      "path": "include/nr_execution_profile.h",
+      "sha256": "c0324f59f1018242d47abf578393aeea574a8b89b443b7ff8b7beeb3405bc204"
+    },
+    {
+      "path": "include/nr_extent.h",
+      "sha256": "115c497d62ca692d7347e1ae27e93e997f2cce32875d2ededdaffc28bb258fd3"
+    },
+    {
+      "path": "include/nr_gpu_model.h",
+      "sha256": "3bf454ef73738eeaf88c25f60da1aac0a36b429f66a3f9e30ed78ae4497fff4b"
+    },
+    {
+      "path": "include/nr_gpu_scheduled_state.h",
+      "sha256": "38e808e87e3440853766c00c4deb9c5152bbf831e34fcd0565800d57ec144e08"
+    },
+    {
+      "path": "include/nr_int8_handoff.h",
+      "sha256": "5adc6d050ef21c886851bfbf38d6159fd397a6ae57b57414aed5d315b5e435af"
+    },
+    {
+      "path": "include/nr_int8_runtime.h",
+      "sha256": "d5afd68ab5cdd2754a5edcbfd07e1ad5463746cc366c7a2d68d7d19a54ad5beb"
+    },
+    {
+      "path": "include/nr_pinned_runtime_contract.h",
+      "sha256": "9dc9dd7bbf384675ef584ddf3241bdc9ac1c425c0f906ebb0d5fcd1605debf2e"
+    },
+    {
+      "path": "include/nr_runtime_contract.h",
+      "sha256": "081c370f92906cd30f8f050baf9367bd14a356011ad26d94016d2d18ddaeb128"
+    },
+    {
+      "path": "include/nr_runtime_v3_contract.h",
+      "sha256": "9cda869a429a7955b5a4af62702cb621bd714c4837e14e6f8db33926f97ddca8"
+    },
+    {
+      "path": "include/nr_runtime_v3_dx12.h",
+      "sha256": "e9b0c663a499ef47cdb6adbd4d9cf499d23985bf7191e23e3a109a424ec0aa32"
+    },
+    {
+      "path": "include/nr_runtime_v3_session.h",
+      "sha256": "9335025cfa2c946a123fed73b6b430f3f3d8f4b2ec0b93481b8a29d9479f9e59"
+    },
+    {
+      "path": "include/nr_runtime_v3_test.h",
+      "sha256": "c258874d60756dbb1324143788df2de0c01c46455375ea9fda4a1d7bcd6e48df"
+    },
+    {
+      "path": "include/nr_runtime_v3_validation.h",
+      "sha256": "7d3c0c045d5ec0a618b080efd43109832f19e5b8d5aa00aadc7a5f1f9f0d182a"
+    },
+    {
+      "path": "include/nr_runtime_validation.h",
+      "sha256": "e410424d4b07fe2fe916be62e6ea193a3259e63e8c6727fb9e7965e11490f4b5"
+    },
+    {
+      "path": "include/nr_scheduled_runtime_contract.h",
+      "sha256": "266b5c487dd8fcd88396adb419a0c4c9d276dabc5acb71774fb7e4c939cdf085"
+    },
+    {
+      "path": "include/nr_spatial_graph.h",
+      "sha256": "3593a23b0c9806e8cdb2a40d778a95ca9a8b4745df6010297e27145a6e6672ee"
+    },
+    {
+      "path": "include/nr_split_resident.h",
+      "sha256": "4c639ea7cb7c6b11a75890fd92a06d3496e2062a3d808ff0e2289307d467931e"
+    },
+    {
+      "path": "include/nr_submission_runtime_contract.h",
+      "sha256": "2d27c3a6768a5611218cb15d99cdaeda9be889dccfa9083794af647c226d1db3"
+    },
+    {
+      "path": "include/nr_weight_package.h",
+      "sha256": "299e1896e77eda8ba0e911891f608160370be37fef828c562a1c0b5691c4d33c"
+    },
+    {
+      "path": "include/nr_window_runtime.h",
+      "sha256": "8a75a4c5a83f5c57eda2eb672b9259b2fbc44e56ac14805c23c5241604016c38"
+    },
+    {
+      "path": "src/nr_gpu_model.cpp",
+      "sha256": "e8d49147a02a5f61d2e529913d15948b1c3efa6b19341a0a909ee5059a1f6b64"
+    },
+    {
+      "path": "src/nr_runtime_v3_dx12.cpp",
+      "sha256": "4aa7cd5e060bfa178dfa9a99916b1726baaff60327658f3a74a1205c4ba9ed2a"
+    },
+    {
+      "path": "src/nr_weight_package.cpp",
+      "sha256": "176264e8f9b25493b3177bbf11eae4fde077441288d676033f378b1e2c8db3ce"
+    },
+    {
+      "path": "src/runtime_v2_neural_kernel.hip",
+      "sha256": "a386a16f098928af456ffdf8b142d10560240b1a2e93962fb96dacd263273710"
+    },
+    {
+      "path": "src/scheduled_runtime_plugin.cpp",
+      "sha256": "a694b1ea9973d5c4af40266f7708e47cf13279b7f25796602b7427b3c62d6035"
+    },
+    {
+      "path": "src/scheduled_state_kernel.hip",
+      "sha256": "49838e2cf0b6a98dbeef309fd8cd0fc825eaba0d0f3e53181889f1d2628e0fc8"
+    },
+    {
+      "path": "src/spatial_graph.cpp",
+      "sha256": "9eb6bbc2158382135c42f056e072fe34c06fec9d3a20d04307564dc767a0017b"
+    },
+    {
+      "path": "OptiScaler/dlssnr/native/NativeAdapter.cpp",
+      "sourceSha256": "e3ab42081b61867f01ce3691ce1e8f7580499f9b79f3b906164597cc2f575184",
+      "sha256": "6be2a9175ef03e85e51cc94baf20d5fb38601d3aa9e00617d10faa2d91d97e2d"
+    },
+    {
+      "path": "OptiScaler/dlssnr/native/NativeAdapter.h",
+      "sourceSha256": "0c482991eefa9787c807dd09a69c2bed9ae2dd12a4ec53a84b0604b9c1ddcf7e",
+      "sha256": "f67f73ea197f25d682b5cecc9e0cd333c8f0844ceff9c1556ebda61f8fc13c00"
+    },
+    {
+      "path": "OptiScaler/dlssnr/native/NativeHookHub.h",
+      "sourceSha256": "202ac1b8eeef2959cf8921c2053c4fb77cc66dd57f6a3003f34d528011f49208",
+      "sha256": "812a137bdd00e3404d40a02eb067feb1a8d901f34f6cd5a9ad9fb223a1ae28c2"
+    },
+    {
+      "path": "OptiScaler/dlssnr/native/NativeMethods.h",
+      "sourceSha256": "55225deb592e6b9fabc2123502ed7ecdcf9c8a83fe2d75a997c8543ee0ba09e1",
+      "sha256": "55225deb592e6b9fabc2123502ed7ecdcf9c8a83fe2d75a997c8543ee0ba09e1"
+    },
+    {
+      "path": "OptiScaler/dlssnr/native/NativeMotion.h",
+      "sourceSha256": "f8bff5701982434cebbc889a982fda3f20e6aed04e8a11426c5c7e17e97330aa",
+      "sha256": "c9b010c9500f82b7c0899bdbc4e7984ae31689a35390219228bba01e3173bacc"
+    },
+    {
+      "path": "OptiScaler/dlssnr/native/NativeQueueTransaction.h",
+      "sourceSha256": "8b6dd7912616e0ebb1edc2a71638799986ccab6f9f4722f495b25c78076087e6",
+      "sha256": "2559d303bb986bbb7f22feef92443dedbaee3af2b52120a5e9769b95ac11bda0"
+    },
+    {
+      "path": "OptiScaler/dlssnr/native/NativeRecorderMethods.inl",
+      "sourceSha256": "68a71e157bb4b0a81202450234a2831b545adb681e54690c11b05e592b286c53",
+      "sha256": "68a71e157bb4b0a81202450234a2831b545adb681e54690c11b05e592b286c53"
+    },
+    {
+      "path": "OptiScaler/dlssnr/native/NativeRecording.h",
+      "sourceSha256": "d17c7956474d952abb4d6d3d23b8b221d3fc85a3757e617d713cff2de291005c",
+      "sha256": "ae1fdcf710b95b5f75542c47c57a4b808a2bb099d3647b642ef1c1f83d602d6b"
+    },
+    {
+      "path": "OptiScaler/dlssnr/native/NativeRecordingMethods.inl",
+      "sourceSha256": "0275f51a3eb4c5f1265692109251f55a1d304d91c1671cfe6b15a473ce8db0ab",
+      "sha256": "0275f51a3eb4c5f1265692109251f55a1d304d91c1671cfe6b15a473ce8db0ab"
+    },
+    {
+      "path": "OptiScaler/dlssnr/native/NativeSession.cpp",
+      "sourceSha256": "72e20c875a70073f96e63b90970b85583c37985a28341ac05f753c95949d3ea9",
+      "sha256": "6b08253df656fa2a229e46ea30e2a966bb0aa2161de9d41a5bd73dd2cfeaabe8"
+    },
+    {
+      "path": "OptiScaler/dlssnr/native/NativeSession.h",
+      "sourceSha256": "7ad0774dda8007755ebd0d3c36ebd4f6bd7b8382f0e8a5ef0a2528e48536c1b9",
+      "sha256": "3e64b0e4134c9328d72da9f9724d2439e7ab2e065aa547b7497bae8315deaa35"
+    },
+    {
+      "path": "OptiScaler/dlssnr/HipFrameSettings.h",
+      "sourceSha256": "c0082e7dae9118a07799899fe5406695e51a8d0792fd8a7ac393c8e5f94646bd",
+      "sha256": "3934711bdcc5e247821c1ce0b3671b9ee2bd98d931e805db4d14d8a03f0d55b1"
+    }
+  ],
+  "sourceGitHead": "9f829c0ed5d1542056206ce55e71d585272be572"
+}

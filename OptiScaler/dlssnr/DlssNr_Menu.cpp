@@ -7,6 +7,8 @@
 #include "DlssNr_Upscaler.h"
 #include "DlssNr_MenuSections.h"
 #include "DlssNr_Placement.h"
+#include "NrBackendSelection.h"
+#include "native/NativeAdapter.h"
 #include <Config.h>
 #include <menu/menu_common.h>
 #include <algorithm>
@@ -52,6 +54,55 @@ static void RenderStatus(Config* config)
     const auto dx12 = ReadStatus(Backend::Dx12);
     const auto vk = ReadStatus(Backend::Vulkan);
     const bool vulkan = vk.running;
+    const auto feature = State::Instance().currentFeature;
+    const auto device = State::Instance().currentD3D12Device;
+    if (enabled && feature && device &&
+        (feature->Api() == API::DX12 || feature->IsWithDx12()))
+    {
+        const auto selected = SelectNrBackend(device, config->DlssNrBackend.value_or_default());
+        if (selected == NrBackendSelection::AmdHip)
+        {
+            if (config->DlssNrPasses.value_or_default() != 1 ||
+                config->DlssNrFinishedPicture.value_or_default() ||
+                config->DlssNrDeferredDlss.value_or_default() ||
+                config->DlssNrResidualAcrossRr.value_or_default() ||
+                config->DlssNrHoldFrame.value_or_default())
+            {
+                ImGui::TextWrapped("AMD HIP currently supports one ordinary pass before or after upscale. "
+                                   "Turn off finished-picture, separate-edit and hold-frame modes.");
+                return;
+            }
+            const auto native = Native::ReadRuntimeStatus();
+            if (native.fault)
+            {
+                ImGui::TextWrapped("RDNA2 NR fault: %s", native.reason.c_str());
+                ImGui::TextDisabled("Correct the model or runtime issue, then restart the game.");
+            }
+            else if (!native.ready)
+                ImGui::TextUnformatted(native.pending ? "RDNA2 NR preparing model and queue."
+                                                     : "RDNA2 NR waiting for a qualified submission.");
+            else if (native.lastOutcome == 2)
+                ImGui::Text("RDNA2 NR skipped the last submission (%llu applied, %llu raw).",
+                            native.applied, native.bypassed);
+            else if (native.lastOutcome == 1)
+                ImGui::Text("RDNA2 NR active (%llu frames%s).", native.applied,
+                            config->DlssNrApplyModel.value_or_default() ? "" : ", edit hidden");
+            else
+                ImGui::TextUnformatted("RDNA2 NR ready; waiting for the next frame.");
+            return;
+        }
+        if (selected == NrBackendSelection::Unsupported)
+        {
+            const auto forced = config->DlssNrBackend.value_or_default();
+            if (forced == 3)
+                ImGui::TextWrapped("Forced HIP needs a gfx1030 AMD adapter; this D3D12 device does not match.");
+            else if (forced == 0)
+                ImGui::TextWrapped("Forced NVIDIA NGX needs an NVIDIA adapter; this D3D12 device does not match.");
+            else
+                ImGui::TextWrapped("No NR backend supports this D3D12 adapter.");
+            return;
+        }
+    }
 
     // An existing model handle does not mean NR is enabled this frame.
     if (!enabled)
@@ -141,6 +192,30 @@ void RenderMenu(Config* config, float menuResScale)
     if (auto header = ScopedCollapsingHeader("DLSS Neural Rendering"); header.IsHeaderOpen())
     {
         ScopedIndent indent {};
+        const auto configuredBackend = config->DlssNrBackend.value_or_default();
+        int backendChoice = configuredBackend == 0 ? 1 : configuredBackend == 3 ? 2 : 0;
+        if (ImGui::Combo("Model backend", &backendChoice,
+                         "Auto\0NVIDIA NGX\0AMD HIP (gfx1030)\0"))
+        {
+            config->DlssNrBackend = backendChoice == 0 ? 4u : backendChoice == 1 ? 0u :
+                                    3u;
+            DlssNr::RetryAfterFailure();
+        }
+        const auto featureDevice = State::Instance().currentD3D12Device;
+        const bool hip = featureDevice &&
+                         SelectNrBackend(featureDevice, config->DlssNrBackend.value_or_default()) ==
+                             NrBackendSelection::AmdHip;
+        if (hip)
+            ImGui::TextDisabled("HIP supports one pass before or after upscale on gfx1030.");
+        if (featureDevice)
+        {
+            const auto active = SelectNrBackend(featureDevice, config->DlssNrBackend.value_or_default());
+            ImGui::TextDisabled("Selected: %s", NrBackendName(active));
+            if (active == NrBackendSelection::Unsupported)
+                ImGui::TextWrapped("This device has no supported NR model backend. The current HIP package targets gfx1030.");
+        }
+        else
+            ImGui::TextDisabled("Backend will be selected when the game creates a D3D12 feature.");
         const float toggleGap = ImGui::GetStyle().ItemSpacing.x;
         const float toggleWidth = (ImGui::GetContentRegionAvail().x - toggleGap) * 0.5f;
         const float toggleRight = ImGui::GetCursorPosX() + toggleWidth + toggleGap;
@@ -176,20 +251,24 @@ void RenderMenu(Config* config, float menuResScale)
             ImGui::SetTooltip(placement.deferred ? "The separate-edit path always generates before upscale."
                                                  : "Run NR before the game's upscaler, including RR.");
 
+        ImGui::BeginDisabled(hip && !finished);
         if (PipelineUi::CheckboxWrapped("Apply NR to the finished picture", &finished, toggleWidth))
         {
             config->DlssNrFinishedPicture = finished;
             DlssNr::RetryAfterFailure();
         }
+        ImGui::EndDisabled();
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
-                "Apply NR after game effects and HUD. Early generation carries the edit through a separate upscaler.");
+                hip ? "The gfx1030 HIP path has not qualified finished-picture placement."
+                    : "Apply NR after game effects and HUD. Early generation carries the edit through a separate upscaler.");
 
         placement = ResolvePlacement(config->DlssNrRunBeforeSr.value_or_default(),
                                      config->DlssNrDeferredDlss.value_or_default(),
                                      config->DlssNrResidualAcrossRr.value_or_default(), finished);
         ImGui::SameLine(toggleRight);
         bool deferred = placement.deferred;
+        ImGui::BeginDisabled(hip && !deferred);
         if (PipelineUi::CheckboxWrapped("Generate before upscale, apply after upscale", &deferred, toggleWidth))
         {
             config->DlssNrDeferredDlss = deferred;
@@ -197,10 +276,11 @@ void RenderMenu(Config* config, float menuResScale)
             if (deferred || finished)
                 config->DlssNrRunBeforeSr = deferred;
         }
+        ImGui::EndDisabled();
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(
-                "Keep the game's SR/RR input clean and upscale only the NR edit with a separate non-RR backend."
-                "\nApply after upscale, or at presentation when finished-picture mode is enabled.");
+            ImGui::SetTooltip(hip ? "The gfx1030 HIP path has not qualified separate edit upscaling."
+                                  : "Keep the game's SR/RR input clean and upscale only the NR edit with a separate non-RR backend."
+                                    "\nApply after upscale, or at presentation when finished-picture mode is enabled.");
         ImGui::Spacing();
 
         placement = ResolvePlacement(config->DlssNrRunBeforeSr.value_or_default(),

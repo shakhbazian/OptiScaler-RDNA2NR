@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "DlssNr_Dx12_State.h"
+#include <dlssnr/NrBackendSelection.h>
+#include <dlssnr/native/NativeAdapter.h>
 
 bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID3D12Device* device,
                                           const DlssNrFrameInfo& frame, const D3D12_RESOURCE_DESC& desc,
@@ -7,12 +9,15 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
                                           unsigned int requestedPasses, bool spatial)
 {
     const auto& cfg = *Config::Instance();
+    const bool hip = DlssNr::SelectNrBackend(device, cfg.DlssNrBackend.value_or_default()) ==
+                     DlssNr::NrBackendSelection::AmdHip;
     const auto width = native.width, height = native.height;
     const auto workWidth = work.width, workHeight = work.height;
     const bool cropColor = frame.BeforeUpscale && (width != desc.Width || height != desc.Height);
     const bool reduced = workWidth != width || workHeight != height;
-    const auto modelFormat = spatial ? DXGI_FORMAT_R16G16B16A16_FLOAT : desc.Format;
-    ReleaseSurfacesIfFormatChanged(modelFormat, desc.Format);
+    const auto modelFormat = (spatial || hip) ? DXGI_FORMAT_R16G16B16A16_FLOAT : desc.Format;
+    const auto proxyFormat = hip ? DXGI_FORMAT_R16G16B16A16_FLOAT : desc.Format;
+    ReleaseSurfacesIfFormatChanged(modelFormat, desc.Format, proxyFormat);
 
     const bool resolutionChanged =
         nr.width != width || nr.height != height || nr.workWidth != workWidth || nr.workHeight != workHeight;
@@ -51,8 +56,14 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
     if (nr.output == nullptr)
     {
         nr.output = CreateScratch(device, modelFormat, workWidth, workHeight);
-        nr.colorCopy = CreateScratch(device, desc.Format, width, height);
+        nr.colorCopy = CreateScratch(device, proxyFormat, width, height);
         nr.hdrCopy = CreateScratch(device, desc.Format, width, height);
+        if (nr.output)
+            nr.output->SetName(L"NR model output");
+        if (nr.colorCopy)
+            nr.colorCopy->SetName(L"NR model input");
+        if (nr.hdrCopy)
+            nr.hdrCopy->SetName(L"NR HDR input");
         nr.workWidth = workWidth;
         nr.workHeight = workHeight;
         nr.width = width;
@@ -133,6 +144,26 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
 
     // Prepare at most one missing layer per submission. Repeated CPU calls in the same epoch
     // cannot evaluate creation work or create another layer before the first one is submitted.
+    if (hip)
+    {
+        if (!nr.hipModel)
+        {
+            auto model = DlssNr::Native::MakeModelBackend();
+            if (!model || !model->Initialize(device))
+            {
+                nr.reason = "AMD HIP model could not attach to this D3D12 device";
+                return false;
+            }
+            nr.hipModel = std::move(model);
+        }
+        if (!nr.hipModel->Resize({ workWidth, workHeight, modelFormat }))
+        {
+            nr.reason = "AMD HIP model does not support this working size or format";
+            return false;
+        }
+        return true;
+    }
+
     for (unsigned int pass = requestedPasses; pass < DlssNr::MaxPassCount; ++pass)
     {
         nr.models[pass].RetryAfterFailure();

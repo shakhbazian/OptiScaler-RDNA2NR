@@ -256,6 +256,11 @@ class Config
     // DLSS Neural Rendering
     // NR is opt-in. Placement defaults to the upscaler output.
     CustomOptional<bool> DlssNrEnabled { false };
+    // Legacy numeric selector while older INI files are migrated to named backends.
+    CustomOptional<uint32_t> DlssNrBackend { 4 }; // Auto: gfx1030 HIP or original NVIDIA NGX.
+    // User-created NRWGT package. Empty selects the per-user RDNA2-NR model cache.
+    CustomOptional<std::string> DlssNrModelPath { "" };
+    CustomOptional<bool> DlssNrTemporalAccumulation { true };
     CustomOptional<bool> DlssNrRunBeforeSr { false };
     CustomOptional<bool> DlssNrFinishedPicture { false };
     // Fit the scene-to-finished HDR response for early residuals.

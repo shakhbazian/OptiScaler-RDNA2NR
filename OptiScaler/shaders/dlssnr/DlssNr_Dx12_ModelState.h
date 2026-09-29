@@ -4,6 +4,7 @@
 #include <dlssnr/DlssNrFeature_Dx12.h>
 #include <shaders/output_scaling/OS_Dx12.h>
 #include "DlssNr_Spatial.h"
+#include <dlssnr/backend/INrBackend.h>
 
 namespace DlssNr::Detail
 {
@@ -12,6 +13,8 @@ struct ModelStateDx12
     unsigned long long successfulDispatches = 0;
     // Each model pass owns its NGX feature, parameters and temporal history.
     DlssNr::Proxy::Context models[DlssNr::MaxPassCount];
+    std::unique_ptr<DlssNr::INrBackend> hipModel;
+    bool hipMode = false;
     bool passCreateFailed[DlssNr::MaxPassCount] = {};
 
     // The model cannot read and write one resource, so the frame is staged through these.

@@ -10,11 +10,12 @@ auto DlssNr_Dx12::State::ParkNrResource(ID3D12Resource*& resource) -> void
     lifetime.Retire([retired] { retired->Release(); });
 }
 
-auto DlssNr_Dx12::State::ReleaseSurfacesIfFormatChanged(DXGI_FORMAT modelFormat, DXGI_FORMAT nativeFormat) -> void
+auto DlssNr_Dx12::State::ReleaseSurfacesIfFormatChanged(DXGI_FORMAT modelFormat, DXGI_FORMAT nativeFormat,
+                                                        DXGI_FORMAT proxyFormat) -> void
 {
     if (nr.output == nullptr ||
         (nr.output->GetDesc().Format == modelFormat && nr.colorCopy && nr.hdrCopy &&
-         nr.colorCopy->GetDesc().Format == nativeFormat && nr.hdrCopy->GetDesc().Format == nativeFormat))
+         nr.colorCopy->GetDesc().Format == proxyFormat && nr.hdrCopy->GetDesc().Format == nativeFormat))
         return;
 
     LOG_INFO("DLSS-NR rebuilding surfaces: model format {} -> {}, frame format {}", (int) nr.output->GetDesc().Format,
@@ -101,6 +102,8 @@ auto DlssNr_Dx12::State::CreateScratch(ID3D12Device* device, DXGI_FORMAT format,
     ID3D12Resource* res = nullptr;
     device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
                                     IID_PPV_ARGS(&res));
+    if (res)
+        res->SetName(L"NR scratch texture");
     return res;
 }
 

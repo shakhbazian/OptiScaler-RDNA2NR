@@ -1,6 +1,8 @@
 #include <pch.h>
 #include "IFeature_Dx11wDx12.h"
 #include "NgxOptionalDx12Inputs.h"
+#include <dlssnr/NrBackendSelection.h>
+#include <dlssnr/native/NativeAdapter.h>
 
 #include <Util.h>
 #include <Config.h>
@@ -312,6 +314,20 @@ bool IFeature_Dx11wDx12::Init(ID3D11Device* InDevice, ID3D11DeviceContext* InCon
                  "creation will be missing it");
     }
 
+    // This bridge owns its D3D12 queue, so HIP can finish preparation while
+    // the feature is created instead of skipping the first game frame.
+    const auto& nrConfig = *Config::Instance();
+    if (IsInited() && nrConfig.DlssNrEnabled.value_or_default() &&
+        DlssNr::SelectNrBackend(_dx11on12Device, nrConfig.DlssNrBackend.value_or_default()) ==
+            DlssNr::NrBackendSelection::AmdHip)
+    {
+        const bool before = nrConfig.DlssNrRunBeforeSr.value_or_default();
+        const auto width = before ? RenderWidth() : DisplayWidth();
+        const auto height = before ? RenderHeight() : DisplayHeight();
+        if (!DlssNr::Native::PrepareOwned(Handle()->Id, _dx11on12Device, Dx12CommandQueue,
+                                         width, height, before))
+            LOG_WARN("AMD HIP NR preparation unavailable on the DX11/DX12 bridge");
+    }
     return IsInited();
 }
 
@@ -636,6 +652,10 @@ bool IFeature_Dx11wDx12::BaseInit(ID3D11Device* InDevice, ID3D11DeviceContext* I
     }
 
     Dx12CommandListType = WithDx12::GetD3D12CommandListType();
+    if (Config::Instance()->DlssNrEnabled.value_or_default() &&
+        DlssNr::SelectNrBackend(_dx11on12Device, Config::Instance()->DlssNrBackend.value_or_default()) ==
+            DlssNr::NrBackendSelection::AmdHip && !DlssNr::Native::Initialize(_dx11on12Device))
+        LOG_WARN("AMD HIP NR recorder could not initialize for the DX11/DX12 bridge");
 
     if (!CreateD3D12Objects())
     {

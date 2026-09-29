@@ -5,6 +5,8 @@
 #include <State.h>
 #include <shaders/dlssnr/DlssNr_Dx12.h>
 #include <shaders/dlssnr/DlssNr_ActiveColor.h>
+#include <dlssnr/native/NativeAdapter.h>
+#include <dlssnr/NrBackendSelection.h>
 
 namespace
 {
@@ -153,6 +155,10 @@ ShaderPass_Dx12 MakeDlssNrPass(DlssNr_Dx12& shader, ID3D12Device* device, ID3D12
         },
         [=, &shader](ID3D12Resource* input, ID3D12Resource* output) -> bool
         {
+            // The HIP model needs a private list so Encode, model publication and Resolve
+            // can be submitted as one queue transaction. NGX keeps its ordinary path.
+            const auto dispatch = [&](ID3D12GraphicsCommandList* work, bool* modelRecorded) -> bool
+            {
             // Every guide is returned to the upscaler's input state, including failed NR evaluations.
             struct RestoreInputs
             {
@@ -172,34 +178,74 @@ ShaderPass_Dx12 MakeDlssNrPass(DlssNr_Dx12& shader, ID3D12Device* device, ID3D12
                     for (auto it = resources.rbegin(); it != resources.rend(); ++it)
                         NrBarrier(commandList, it->first, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, it->second);
                 }
-            } restore { commandList };
+            } restore { work };
 
             if (beforeUpscale)
             {
                 restore.Read(input, states.color);
-                shader.SetBufferState(commandList, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                shader.SetBufferState(work, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             }
             else
-                shader.SetBufferState(commandList, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                shader.SetBufferState(work, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             restore.Read(depth, states.depth);
             restore.Read(motion, states.motion);
 
-            const bool result = shader.Dispatch(commandList, input, depth, motion, output, frame, timingQueue);
+            const bool result = shader.Dispatch(work, input, depth, motion, output, frame, timingQueue);
+            if (modelRecorded)
+                *modelRecorded = result;
             if (beforeUpscale)
             {
-                shader.SetBufferState(commandList, states.color);
+                shader.SetBufferState(work, states.color);
                 return result;
             }
             if (!result)
             {
                 // A disabled/failed optional pass must still provide the next stage with the original frame.
-                shader.SetBufferState(commandList, D3D12_RESOURCE_STATE_COPY_SOURCE);
-                NrBarrier(commandList, output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
-                DlssNr::CopyActiveColor(commandList, output, input,
+                shader.SetBufferState(work, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                NrBarrier(work, output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+                DlssNr::CopyActiveColor(work, output, input,
                                         { (unsigned) input->GetDesc().Width, input->GetDesc().Height });
-                NrBarrier(commandList, output, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                NrBarrier(work, output, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             }
             return true;
+            };
+            if (DlssNr::SelectNrBackend(device, Config::Instance()->DlssNrBackend.value_or_default()) !=
+                    DlssNr::NrBackendSelection::AmdHip || DlssNr::Native::FrontendActive())
+                return dispatch(commandList, nullptr);
+
+            if (!DlssNr::Native::FrontendSessionReady(parameters, beforeUpscale, device, timingQueue))
+            {
+                // The first qualified submission discovers the real game queue
+                // and warms HIP. Keep the colour frontend off that raw frame:
+                // its private resource transitions would not be submitted.
+                if (const char* reason = DlssNr::Native::Mark(commandList, parameters, beforeUpscale, true, interop))
+                    LOG_WARN("AMD HIP NR warmup marker skipped: {}", reason);
+                if (beforeUpscale)
+                    return false;
+                shader.SetBufferState(commandList, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                NrBarrier(commandList, output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                          D3D12_RESOURCE_STATE_COPY_DEST);
+                DlssNr::CopyActiveColor(commandList, output, input,
+                                        { (unsigned) input->GetDesc().Width, input->GetDesc().Height });
+                NrBarrier(commandList, output, D3D12_RESOURCE_STATE_COPY_DEST,
+                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                return true;
+            }
+
+            bool modelRecorded = false;
+            const char* reason = DlssNr::Native::RecordFrontend(
+                commandList, parameters, beforeUpscale, {}, [&](ID3D12GraphicsCommandList* owned)
+                {
+                    dispatch(owned, &modelRecorded);
+                    if (modelRecorded)
+                        DlssNr::Native::CompleteFrontend();
+                }, interop);
+            if (reason != nullptr)
+            {
+                LOG_WARN("AMD HIP NR skipped: {}", reason);
+                return false;
+            }
+            return modelRecorded;
         }
     };
 }

@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "DlssNr_Dx12_State.h"
+#include <dlssnr/NrBackendSelection.h>
+#include <dlssnr/native/NativeAdapter.h>
 
 auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* colour, ID3D12Resource* depth,
                              ID3D12Resource* motion, ID3D12Resource* output, const DlssNrFrameInfo& frame,
@@ -57,6 +59,13 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
     }
 
     auto* device = deviceRef.Get();
+    const auto backend = DlssNr::SelectNrBackend(device, cfg.DlssNrBackend.value_or_default());
+    if (backend == DlssNr::NrBackendSelection::Unsupported)
+    {
+        ReportSkipOnce("no NR model backend supports this GPU and configuration");
+        return;
+    }
+    const bool hip = backend == DlssNr::NrBackendSelection::AmdHip;
     const D3D12_RESOURCE_DESC desc = target->GetDesc();
     const auto active =
         frame.BeforeUpscale
@@ -109,12 +118,30 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
                  guideHeight, width, height);
     }
 
-    const unsigned int requestedPasses =
+    if (hip != nr.hipMode)
+    {
+        for (auto& model : nr.models)
+            model.RetryAfterFailure();
+        if (nr.hipModel)
+        {
+            nr.hipModel->Shutdown();
+            nr.hipModel.reset();
+        }
+        nr.hipMode = hip;
+        nr.reset = true;
+    }
+    if (hip && !DlssNr::Native::FrontendActive())
+    {
+        ReportSkipOnce("AMD HIP requires an observed native command list");
+        return;
+    }
+    const unsigned int requestedPasses = hip ? 1u :
         std::clamp(cfg.DlssNrPasses.value_or_default(), 1u,
                    cfg.DlssNrUnlockPasses.value_or_default() ? DlssNr::MaxPassCount : DlssNr::DefaultMaxPassCount);
     for (auto& model : nr.models)
         model.Collect();
-    if ((!NVNGXProxy::IsDx12Inited() && !NVNGXProxy::InitDx12(device)) || !DlssNr::Proxy::Context::Available())
+    if (!hip &&
+        ((!NVNGXProxy::IsDx12Inited() && !NVNGXProxy::InitDx12(device)) || !DlssNr::Proxy::Context::Available()))
     {
         nr.failed = true;
         nr.reason = "the NVIDIA NGX driver does not provide Neural Rendering";
@@ -127,6 +154,11 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
     if (!std::isfinite(workScale))
         workScale = 1.0f;
     workScale = std::clamp(workScale, 0.25f, 2.0f);
+    if (hip && (workScale != 1.0f || cfg.DlssNrSpatialCompression.value_or_default()))
+    {
+        ReportSkipOnce("AMD HIP currently requires full working size without spatial compression");
+        return;
+    }
     const auto workWidth = (unsigned int) (width * workScale + 0.5f);
     const auto workHeight = (unsigned int) (height * workScale + 0.5f);
     const bool reduced = workWidth != width || workHeight != height;
@@ -343,7 +375,7 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
     // falls back to reusing the main feature: that tells one temporal model several frames elapsed in
     // one game frame and makes its history fight the later layers.
     unsigned int effectivePasses = 1;
-    if (nr.passScratch != nullptr)
+    if (!hip && nr.passScratch != nullptr)
     {
         for (unsigned int pass = 1; pass < requestedPasses; ++pass)
         {
@@ -418,8 +450,36 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
         bool evaluated = false;
         modelFrame.color = passInput;
         modelFrame.output = passOutput;
-        result = static_cast<int>(nr.models[pass].Run(cmdList, device, modelFrame, PassSettings(cfg, pass),
-                                                      frame.SubmissionEpoch, &evaluated));
+        if (hip)
+        {
+            DlssNr::NrBackendFrame backendFrame {};
+            backendFrame.commands = cmdList;
+            backendFrame.queue = timingQueue;
+            backendFrame.submissionEpoch = frame.SubmissionEpoch;
+            backendFrame.input = passInput;
+            backendFrame.depth = depthIn;
+            backendFrame.motion = motionIn;
+            backendFrame.output = passOutput;
+            backendFrame.size = { modelWidth, modelHeight, DXGI_FORMAT_R16G16B16A16_FLOAT };
+            backendFrame.guideWidth = modelFrame.guides.depth.width;
+            backendFrame.guideHeight = modelFrame.guides.depth.height;
+            backendFrame.motionWidth = modelFrame.guides.motion.width;
+            backendFrame.motionHeight = modelFrame.guides.motion.height;
+            backendFrame.depthBaseX = modelFrame.guides.depth.x;
+            backendFrame.depthBaseY = modelFrame.guides.depth.y;
+            backendFrame.motionBaseX = modelFrame.guides.motion.x;
+            backendFrame.motionBaseY = modelFrame.guides.motion.y;
+            backendFrame.motionScaleX = modelFrame.mvScaleX;
+            backendFrame.motionScaleY = modelFrame.mvScaleY;
+            backendFrame.depthInverted = modelFrame.depthInverted;
+            backendFrame.reset = modelFrame.reset;
+            const auto answer = nr.hipModel->Evaluate(backendFrame);
+            evaluated = answer.result == DlssNr::NrBackendResult::Success;
+            result = evaluated ? NVSDK_NGX_Result_Success : NVSDK_NGX_Result_Fail;
+        }
+        else
+            result = static_cast<int>(nr.models[pass].Run(cmdList, device, modelFrame, PassSettings(cfg, pass),
+                                                          frame.SubmissionEpoch, &evaluated));
         modelRunning = evaluated && result == NVSDK_NGX_Result_Success;
         if (!evaluated || result != NVSDK_NGX_Result_Success)
             break;

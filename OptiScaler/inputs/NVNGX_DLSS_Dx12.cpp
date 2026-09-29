@@ -1,4 +1,6 @@
 #include "pch.h"
+#include <dlssnr/NrBackendSelection.h>
+#include <dlssnr/native/NativeAdapter.h>
 #include "Util.h"
 #include "Config.h"
 
@@ -216,6 +218,14 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_Init_Ext(unsigned long long InApp
     State::Instance().currentD3D12Device = InDevice;
     D3D12Hooks::HookDevice(InDevice);
 
+    // Install the recorder while NGX initializes. Games can create their
+    // evaluation lists before the first Evaluate call, which is too late to
+    // observe the first list generation safely.
+    if (Config::Instance()->DlssNrEnabled.value_or_default() &&
+        DlssNr::SelectNrBackend(InDevice, Config::Instance()->DlssNrBackend.value_or_default()) ==
+            DlssNr::NrBackendSelection::AmdHip)
+        DlssNr::Native::Initialize(InDevice);
+
     State::Instance().nvngxDx12Inited = true;
 
     UpscalerInputsDx12::Init(InDevice);
@@ -380,6 +390,7 @@ static NVSDK_NGX_Result ShutdownDx12(ID3D12Device* requestedDevice)
     } resetShutdown;
 
     LOG_INFO("NGX D3D12 shutdown: retiring NR GPU owners");
+    DlssNr::Native::Shutdown();
 
     State::Instance().currentFeature = nullptr;
     if (State::Instance().currentFG != nullptr && State::Instance().activeFgInput == FGInput::Upscaler)

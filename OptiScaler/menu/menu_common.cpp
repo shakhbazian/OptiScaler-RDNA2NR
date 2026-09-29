@@ -7924,6 +7924,14 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
                              (state.detectedQuirks.size() > 0) ? "(Q)" : "", state.isOptiPatcherSucceed ? "(OP)" : "");
     }
 
+    // Fullscreen scaling can make ImGui's content-based size wider than the game viewport.
+    // Keep the menu inside that viewport and let ImGui scroll its contents.
+    if (ctx.io.DisplaySize.x > 64.0f && ctx.io.DisplaySize.y > 64.0f)
+    {
+        ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f),
+                                            ImVec2(ctx.io.DisplaySize.x - 32.0f, ctx.io.DisplaySize.y - 32.0f));
+    }
+
     if (ImGui::Begin(windowTitle.c_str(), NULL, flags))
     {
         // Header/status messages shown above the two-column settings table.

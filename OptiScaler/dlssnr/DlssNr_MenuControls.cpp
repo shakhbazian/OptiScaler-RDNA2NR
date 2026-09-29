@@ -2,6 +2,7 @@
 #include "DlssNr_MenuSections.h"
 #include "DlssNr_Placement.h"
 #include "DlssNr_Status.h"
+#include "NrBackendSelection.h"
 #include <shaders/dlssnr/DlssNr_Spatial.h>
 #include <Config.h>
 #include <menu/menu_common.h>
@@ -14,6 +15,13 @@
 
 namespace DlssNr::MenuSections
 {
+static bool HipMode(Config* config)
+{
+    auto* device = State::Instance().currentD3D12Device;
+    return device && SelectNrBackend(device, config->DlssNrBackend.value_or_default()) ==
+                         NrBackendSelection::AmdHip;
+}
+
 template <typename Option> static void Checkbox(const char* label, Option& option)
 {
     bool value = option.value_or_default();
@@ -273,12 +281,14 @@ static void DeferredSlider(const char* label, Option* opt, float mn, float mx, f
 
 void RenderModel(Config* config)
 {
+    const bool hip = HipMode(config);
     bool unlockPasses = config->DlssNrUnlockPasses.value_or_default();
     const int menuPassLimit = unlockPasses ? 10 : 2;
     static int passes = 1;
     static bool editingPasses = false;
     if (!editingPasses)
         passes = (int) std::clamp(config->DlssNrPasses.value_or_default(), 1u, (unsigned) menuPassLimit);
+    ImGui::BeginDisabled(hip);
     ImGui::SliderInt("Model passes", &passes, 1, menuPassLimit, "%d", ImGuiSliderFlags_AlwaysClamp);
     editingPasses = ImGui::IsItemActive();
     if (ImGui::IsItemDeactivatedAfterEdit())
@@ -287,6 +297,13 @@ void RenderModel(Config* config)
     {
         config->DlssNrUnlockPasses = unlockPasses;
         config->DlssNrPasses = std::clamp(config->DlssNrPasses.value_or_default(), 1u, unlockPasses ? 10u : 2u);
+    }
+    ImGui::EndDisabled();
+    if (hip)
+    {
+        if (config->DlssNrPasses.value_or_default() != 1 && ImGui::SmallButton("Use one HIP pass"))
+            config->DlssNrPasses = 1u;
+        ImGui::TextDisabled("The gfx1030 HIP path currently runs one model pass.");
     }
 
     static unsigned selectedPass = 0;
@@ -401,7 +418,10 @@ void RenderInspect(Config* config)
     if (placement.deferred && (config->DlssNrCompare.value_or_default() || config->DlssNrDebugView.value_or_default() ||
                                config->DlssNrShowSkinMask.value_or_default()))
         ImGui::TextWrapped("Compare, debug view and skin-mask inspection suspend the separate edit-upscale path.");
+    const bool hip = HipMode(config);
+    ImGui::BeginDisabled(hip && !config->DlssNrHoldFrame.value_or_default());
     Checkbox("Hold frame", config->DlssNrHoldFrame);
+    ImGui::EndDisabled();
     HelpMarker(
         "Freeze a frame for NR tuning. Later game effects may update; temporal behaviour is not representative.");
 

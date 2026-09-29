@@ -332,6 +332,14 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             // --- DLSS 5 Neural Rendering (OptiScaler/dlssnr) ---
             DlssNrEnabled.set_from_config(readBool("DlssNr", "Enabled"));
+            auto nrBackend = readUInt("DlssNr", "Backend");
+            // Older NR forks exposed experimental model selectors that this
+            // build does not ship. Migrate them to device-based Auto selection.
+            if (nrBackend && *nrBackend != 0 && *nrBackend != 3 && *nrBackend != 4)
+                nrBackend = 4;
+            DlssNrBackend.set_from_config(nrBackend);
+            DlssNrModelPath.set_from_config(readString("DlssNr", "ModelPath"));
+            DlssNrTemporalAccumulation.set_from_config(readBool("DlssNr", "TemporalAccumulation"));
             auto nrBeforeSr = readBool("DlssNr", "RunBeforeSR");
             if (!nrBeforeSr.has_value())
                 nrBeforeSr = readBool("DlssNr", "BeforeUpscale");
@@ -1262,6 +1270,10 @@ bool Config::SaveIni(std::filesystem::path destination)
 
         // --- DLSS 5 Neural Rendering (OptiScaler/dlssnr) ---
         ini.SetValue("DlssNr", "Enabled", GetBoolValue(Instance()->DlssNrEnabled.value_for_config()).c_str());
+        ini.SetValue("DlssNr", "Backend", GetIntValue(Instance()->DlssNrBackend.value_for_config()).c_str());
+        ini.SetValue("DlssNr", "ModelPath", Instance()->DlssNrModelPath.value_for_config_or("").c_str());
+        ini.SetValue("DlssNr", "TemporalAccumulation",
+                     GetBoolValue(Instance()->DlssNrTemporalAccumulation.value_for_config()).c_str());
         ini.SetValue("DlssNr", "FinishedPicture",
                      GetBoolValue(Instance()->DlssNrFinishedPicture.value_for_config()).c_str());
         ini.SetValue("DlssNr", "HdrTransfer", GetBoolValue(Instance()->DlssNrHdrTransfer.value_for_config()).c_str());

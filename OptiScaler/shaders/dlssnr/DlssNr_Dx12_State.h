@@ -132,7 +132,8 @@ struct DlssNr_Dx12::State
 
     void ParkNrResource(ID3D12Resource*& resource);
 
-    void ReleaseSurfacesIfFormatChanged(DXGI_FORMAT modelFormat, DXGI_FORMAT nativeFormat);
+    void ReleaseSurfacesIfFormatChanged(DXGI_FORMAT modelFormat, DXGI_FORMAT nativeFormat,
+                                        DXGI_FORMAT proxyFormat);
     bool PrepareSpatialResources(ID3D12Device* device, const DlssNr::Spatial::Layout& layout);
     void ReleaseSpatialResources();
     void ReleaseSupersamplers();
@@ -461,6 +462,7 @@ struct DlssNr_Dx12::State
     D3D12_RESOURCE_STATES bufferState = D3D12_RESOURCE_STATE_COMMON;
     uint32_t featureFlags = 0;
     DlssNr::ControlRequests controls = DlssNr::ReadControlRequests();
+    uint64_t bufferGeneration = controls.retryGeneration;
     explicit State(DlssNr_Dx12& owner) : shader(owner) {}
     void ConsumeControls();
     void Publish();

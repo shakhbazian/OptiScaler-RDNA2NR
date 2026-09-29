@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include <dlssnr/DlssNr.h>
+#include <dlssnr/native/NativeQueueTransaction.h>
 
 #include "ResTrack_dx12.h"
 
@@ -737,8 +738,10 @@ void ResTrack_Dx12::hkCreateUnorderedAccessView(ID3D12Device* This, ID3D12Resour
 static void STDMETHODCALLTYPE hkNrExecuteCommandLists(ID3D12CommandQueue* queue, UINT count,
                                                       ID3D12CommandList* const* lists)
 {
-    o_ExecuteCommandLists(queue, count, lists);
-    DlssNr::FinishedPictureSubmitted(queue, count, lists);
+    // The shared queue hook owns both NR submission and the existing finished
+    // picture notification. The HIP path can insert private work at its marker.
+    if (DlssNr::NativeQueue::ExecuteBatch(queue, count, lists, o_ExecuteCommandLists))
+        DlssNr::FinishedPictureSubmitted(queue, count, lists);
 }
 
 #pragma region Heap hooks

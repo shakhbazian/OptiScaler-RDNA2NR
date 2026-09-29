@@ -389,7 +389,19 @@ bool DlssNr_Dx12::CreateBufferResource(ID3D12Device* device, ID3D12Resource* sou
     desc.MipLevels = 1;
     desc.Alignment = 0;
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    desc.Flags = (desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) & ~D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
+    // The bridge's wrapped source may allow simultaneous access. This private
+    // scratch is not wrapped: keeping that flag makes D3D12 ignore its UAV
+    // initial state and invalidates our first transition.
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    const auto retryGeneration = DlssNr::ReadControlRequests().retryGeneration;
+    if (_state->bufferGeneration != retryGeneration)
+    {
+        // A discarded native frontend may have changed the CPU-side state
+        // tracker without submitting the transition. Replace this private
+        // resource at its known initial state on the next recording.
+        _state->ParkNrResource(_state->buffer);
+        _state->bufferGeneration = retryGeneration;
+    }
     if (_state->buffer != nullptr)
     {
         const auto previous = _state->buffer->GetDesc();
@@ -402,6 +414,7 @@ bool DlssNr_Dx12::CreateBufferResource(ID3D12Device* device, ID3D12Resource* sou
     if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr,
                                                IID_PPV_ARGS(&_state->buffer))))
         return false;
+    _state->buffer->SetName(L"NR shared shader buffer");
     _state->bufferState = state;
     return true;
 }
