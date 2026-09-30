@@ -1,3 +1,5 @@
+For RDNA2NR build and validation commands, start with [Building](docs/BUILDING.md) and [Architecture](docs/ARCHITECTURE.md). Do not commit model DLLs, converted weights, driver runtimes or private game captures.
+
 # Contributing to OptiScaler
 
 To maintain build efficiency and project structure, please follow these requirements for all code contributions.

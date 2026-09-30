@@ -1,6 +1,6 @@
 # Placement and multipass
 
-`RunBeforeSR` edits owned colour before SR or RR+SR; the default is post-upscale. Invalid pre-colour regions fall back afterward where possible. Colour/output require origin-zero rectangles; [depth/motion regions](../../../docs/NR-MOTION-METADATA.md) are independent.
+`RunBeforeSR` edits owned colour before SR or RR+SR; the default is post-upscale. Invalid pre-colour regions fall back afterward where possible. Colour/output require origin-zero rectangles; [depth/motion regions](../../../docs/upstream/NR-MOTION-METADATA.md) are independent.
 
 Each pass owns a persistent model and temporal history. Later passes inherit the base profile except local tone, which defaults to zero. `Passes` selects the count; `UnlockPasses` permits advanced counts up to the module limit. NR runs only when the full requested chain is ready; allocation, creation or evaluation failure leaves the clean game image and reports an error for Retry.
 
@@ -8,4 +8,4 @@ Encode once, preserve the original input and alternate model outputs A/B. Compos
 
 Profile, placement, format and size changes rebuild affected resources. D3D12 markers protect creation and retirement; submission epochs only pair calls. Vulkan uses creation events and drains before replacement.
 
-`DeferredDLSS` instead upscales a separate edit for post-upscale or finished-picture application. Source RR accumulates that edit using motion vectors before private enlargement. DLSS can use private RR with compatible native guides; other cases use SR. See [private upscaling](../../../docs/DEFERRED-NR-DLSS.md).
+`DeferredDLSS` instead upscales a separate edit for post-upscale or finished-picture application. Source RR accumulates that edit using motion vectors before private enlargement. DLSS can use private RR with compatible native guides; other cases use SR. See [private upscaling](../../../docs/upstream/DEFERRED-NR-DLSS.md).

@@ -15,4 +15,4 @@ The harness compiles the production adapter with standalone loader/PCH seams. Ba
 
 Two contexts run neutral/signed carriers for eight evaluations, exercising reset/history, unit exposure, zero motion, UAV guide-state restoration and missing-guide rejection. Readback checks finite pixels and signal preservation. Fences precede allocator reset/destruction; debug messages are checked when the SDK layer exists.
 
-DLSS, FSR22, FidelityFX and XeSS passed locally on 12 September 2026 without the debug layer. The Cyberpunk-profile RR check also passed with HDR creation; see [private RR](../docs/NR-PRIVATE-RR.md). These static tests do not establish moving-scene quality, game hooks, mode-switch stress or delayed/replayed-command lifetime safety.
+DLSS, FSR22, FidelityFX and XeSS passed locally on 12 September 2026 without the debug layer. The Cyberpunk-profile RR check also passed with HDR creation; see [private RR](../docs/upstream/NR-PRIVATE-RR.md). These static tests do not establish moving-scene quality, game hooks, mode-switch stress or delayed/replayed-command lifetime safety.

@@ -1,3 +1,5 @@
+> General OptiScaler reference. For this fork's AMD Neural Rendering requirements and supported controls, use the [RDNA2NR documentation](docs/README.md).
+
 # Configuration
 This document will try to explain the `OptiScaler.ini` and in-game menu (shortcut key for opening menu is **INSERT**) settings as much as possible. 
 

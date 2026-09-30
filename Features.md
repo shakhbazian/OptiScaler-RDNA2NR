@@ -1,3 +1,5 @@
+> General OptiScaler reference. For this fork's AMD Neural Rendering requirements and supported controls, use the [RDNA2NR documentation](docs/README.md).
+
 ## Features
 * Supports multiple upscaling backends (XeSS, FSR 2.1.2, FSR 2.2.1, FSR 3.1 and DLSS)
 * Experimental support for frame generation (OptiFG by FSR) with version 0.7.0 and above
