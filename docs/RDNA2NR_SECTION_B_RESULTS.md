@@ -111,8 +111,33 @@ the same skip. It prepared NR during feature creation, and its first call took
 about 15 ms. The two runs differ in frontend, logging, controls, and shared-GPU
 load, so they are not an exact A/B benchmark; they show no substantial loss in
 idle steady-state throughput. Shared-GPU timing varies markedly between runs.
-The new first-frame stall is real and needs its own latency investigation.
+The first-frame stall was subsequently traced and corrected below.
 None of these host timings imply 1080p60 with a game running.
+
+## First-frame latency follow-up (2026-09-30)
+
+The old pilot's first timed `Evaluate` took about 15 ms. On the migrated
+frontend it took 0.85–1.12 seconds. Temporary timing probes in the source-built
+DX11-on-12 host localized roughly 12–14 ms to DX11 resource preparation and
+about 1.05 seconds to `IFeature_Dx12::Evaluate` before the NR pass began.
+The latter was the synchronous construction of `DlssNr_Dx12` and its D3D12
+compute pipelines on the first frame. Diagnostic logs are retained under
+`build/tests/rdna2/first-frame-trace*`; the temporary probes were removed.
+
+When NR is already enabled at feature creation, the shader object is now
+constructed in `IFeature_Dx12::Init`. This moves the one-time pipeline setup
+into feature initialization; it does not make that setup free. In two cold
+eight-frame DX11 runs, the first `Evaluate` fell to 38.07 and 35.61 ms.
+All eight frames applied NR, and both final hashes matched the pre-fix result
+exactly. A 60-frame run gave 39.28 ms for the first call, 34.60 ms mean after
+five calls, and 37.11 ms for the full loop; all 60 frames applied NR and the
+output hash matched the earlier 60-frame receipt. The source-built DX11
+occlusion and D3D12 pre/post codec-parity checks passed.
+
+If NR is enabled only after feature creation, the existing lazy construction
+path still builds these pipelines on the first enabled `Evaluate`. Removing
+that toggle-time hitch needs separate asynchronous preparation and lifetime
+handling; this correction covers the observed start-enabled regression.
 
 ## Next boundary
 

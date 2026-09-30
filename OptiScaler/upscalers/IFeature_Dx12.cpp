@@ -33,6 +33,11 @@ bool IFeature_Dx12::Init(ID3D12Device* InDevice, ID3D12GraphicsCommandList* InCo
 
     if (result)
     {
+        // Building the NR pipelines on the first Evaluate stalls that frame.
+        // The feature is already being initialized here, so prepare them now when NR starts enabled.
+        if (Config::Instance()->DlssNrEnabled.value_or_default())
+            NeuralRendering = std::make_unique<DlssNr_Dx12>("Neural Rendering", InDevice);
+
         if (!Config::Instance()->OverlayMenu.value_or_default() && (Imgui == nullptr || Imgui.get() == nullptr))
             Imgui = std::make_unique<Menu_Dx12>(Util::GetProcessWindow(), InDevice);
 
