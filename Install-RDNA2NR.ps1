@@ -9,10 +9,13 @@ param(
     [string]$ProxyName = 'dxgi.dll',
     [string]$PythonPath,
     [string]$ModelRoot,
-    [string]$ReleaseRoot = $PSScriptRoot,
+    [string]$ReleaseRoot,
     [switch]$Gui
 )
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($ReleaseRoot)) {
+    $ReleaseRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($MyInvocation.MyCommand.Path))
+}
 $SourceHash = 'E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E'
 $PackageHash = 'A7E6EE38172A81E12D613FA9A2F57E32AA1944908E56CD2A33E1F6C94369E3CB'
 $PackageBytes = 291595458
