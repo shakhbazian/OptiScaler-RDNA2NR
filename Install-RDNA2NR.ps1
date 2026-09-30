@@ -31,7 +31,14 @@ $Payload = @(
 )
 
 function Get-Hash([string]$Path) {
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($Path))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '')
+    } finally {
+        $sha.Dispose()
+        $stream.Dispose()
+    }
 }
 function Assert-Within([string]$Root, [string]$Path) {
     $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
@@ -43,7 +50,7 @@ function Assert-Within([string]$Root, [string]$Path) {
 function Read-Manifest([string]$Game) {
     $path = Join-Path $Game $ManifestName
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
-    $record = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    $record = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8) | ConvertFrom-Json
     if ($record.schemaVersion -ne 1 -or $record.product -ne 'OptiScaler-RDNA2NR') {
         throw 'Unknown installation manifest; refusing to modify it.'
     }
