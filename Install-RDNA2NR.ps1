@@ -288,13 +288,14 @@ function Show-Installer {
             $box.Text = $values[$i]
             $button = New-Object System.Windows.Forms.Button
             $button.Text = 'Browse'; $button.SetBounds(565, (42 + 70*$i), 70, 27)
+            $button.Tag = $box
             if ($i -eq 0) {
                 $button.Add_Click({ $dialog = New-Object System.Windows.Forms.FolderBrowserDialog;
-                    if ($dialog.ShowDialog() -eq 'OK') { $boxes[0].Text = $dialog.SelectedPath } })
+                    if ($dialog.ShowDialog() -eq 'OK') { $this.Tag.Text = $dialog.SelectedPath } })
             } else {
                 $button.Add_Click({ $dialog = New-Object System.Windows.Forms.OpenFileDialog;
                     $dialog.Filter = 'NVIDIA NR DLL|nvngx_dlssnr.dll|DLL files|*.dll';
-                    if ($dialog.ShowDialog() -eq 'OK') { $boxes[1].Text = $dialog.FileName } })
+                    if ($dialog.ShowDialog() -eq 'OK') { $this.Tag.Text = $dialog.FileName } })
             }
             $form.Controls.Add($button)
         } else {
@@ -308,14 +309,28 @@ function Show-Installer {
     }
     $status = New-Object System.Windows.Forms.Label
     $status.Text = 'The source DLL stays where it is. Conversion runs locally.'
+    $status.AutoEllipsis = $true
     $status.SetBounds(20,234,610,25); $form.Controls.Add($status)
+    $ui = [pscustomobject]@{ Game = $boxes[0]; Dll = $boxes[1]; Proxy = $boxes[2];
+        Status = $status; Form = $form; Payload = $Payload; Python = $PythonPath;
+        Models = $ModelRoot; Release = $ReleaseRoot }
     $install = New-Object System.Windows.Forms.Button
     $install.Text = 'Install / update'; $install.SetBounds(20,266,130,30)
+    $install.Tag = $ui
     $install.Add_Click({
         try {
+            $context = $this.Tag
+            $game = $context.Game.Text.Trim()
+            $dll = $context.Dll.Text.Trim()
+            $proxy = [string]$context.Proxy.SelectedItem
+            if ([string]::IsNullOrWhiteSpace($game)) { throw 'Select the folder containing the game executable.' }
+            if ([string]::IsNullOrWhiteSpace($dll)) { throw 'Select your original nvngx_dlssnr.dll.' }
+            if ([string]::IsNullOrWhiteSpace($proxy)) { throw 'Choose a proxy DLL name.' }
+            if (-not (Test-Path -LiteralPath $game -PathType Container)) { throw "Game folder not found: $game" }
+            if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) { throw "Source DLL not found: $dll" }
             $existing = @()
-            foreach ($relative in (@($boxes[2].Text) + $Payload)) {
-                if (Test-Path -LiteralPath (Join-Path $boxes[0].Text $relative) -PathType Leaf) {
+            foreach ($relative in (@($proxy) + $context.Payload)) {
+                if (Test-Path -LiteralPath (Join-Path $game $relative) -PathType Leaf) {
                     $existing += $relative
                 }
             }
@@ -326,27 +341,37 @@ function Show-Installer {
                     'OptiScaler-RDNA2NR', 'YesNo', 'Warning')
                 if ($answer -ne 'Yes') { return }
             }
-            $status.Text = 'Preparing model and installing...'; $form.Refresh()
-            $py = Find-Python $PythonPath $ReleaseRoot
-            Install-Product $boxes[0].Text $boxes[1].Text $boxes[2].Text $ReleaseRoot $py (Resolve-ModelRoot $ModelRoot) | Out-Null
-            Verify-Product $boxes[0].Text | Out-Null
-            $status.Text = 'Installation verified.'
+            $context.Status.Text = 'Preparing model and installing...'; $context.Form.Refresh()
+            $py = Find-Python $context.Python $context.Release
+            Install-Product $game $dll $proxy $context.Release $py (Resolve-ModelRoot $context.Models) | Out-Null
+            Verify-Product $game | Out-Null
+            $context.Status.Text = 'Installation verified.'
             [System.Windows.Forms.MessageBox]::Show('Installation verified. Enable NR in the OptiScaler menu.','OptiScaler-RDNA2NR') | Out-Null
         } catch {
-            $status.Text = 'Installation failed; see details.'
+            $this.Tag.Status.Text = $_.Exception.Message
             [System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'OptiScaler-RDNA2NR',0,16) | Out-Null
         }
     })
     $form.Controls.Add($install)
     $uninstall = New-Object System.Windows.Forms.Button
     $uninstall.Text = 'Uninstall'; $uninstall.SetBounds(165,266,110,30)
+    $uninstall.Tag = $ui
     $uninstall.Add_Click({
+        $context = $this.Tag
+        $game = $context.Game.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($game)) {
+            [System.Windows.Forms.MessageBox]::Show('Select the game folder first.','OptiScaler-RDNA2NR',0,16) | Out-Null
+            return
+        }
         $answer = [System.Windows.Forms.MessageBox]::Show(
             'Remove this installation and restore any original files?',
             'OptiScaler-RDNA2NR', 'YesNo', 'Question')
         if ($answer -ne 'Yes') { return }
-        try { Uninstall-Product $boxes[0].Text | Out-Null; $status.Text = 'Removed; original files restored.' }
-        catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'OptiScaler-RDNA2NR',0,16) | Out-Null }
+        try { Uninstall-Product $game | Out-Null; $context.Status.Text = 'Removed; original files restored.' }
+        catch {
+            $context.Status.Text = $_.Exception.Message
+            [System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'OptiScaler-RDNA2NR',0,16) | Out-Null
+        }
     })
     $form.Controls.Add($uninstall)
     [void]$form.ShowDialog()
