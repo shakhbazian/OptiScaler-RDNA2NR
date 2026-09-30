@@ -92,11 +92,27 @@ wall-time per frame, including host/upscaler work, not isolated kernel time:
 | Control | off | idle | 10.98 |
 | Control | off | loaded | 21.35 |
 
-The startup/model warmup (about seven seconds on this fixture) is outside the
-timed frame loop. The first five frame calls were excluded from the separately
-recorded median Evaluate time; the whole-loop values above remain the primary
-comparable measurement. These numbers do not imply 1080p60. They establish
-the migration's current performance cost and the effect of shared-GPU load.
+Most model preparation (about seven seconds on this fixture) is outside the
+timed frame loop, but the first `Evaluate` still costs 0.85–1.12 seconds. Thus
+the 60-frame loop averages above include a one-time cost and must not be read
+as steady-state frame time. Skipping the first five calls gives mean `Evaluate`
+times of 33.91/35.75 ms idle and 147.11/150.04 ms under shared-GPU load.
+The corresponding medians are 34.67/36.15 and 149.43/152.47 ms.
+
+After the speed-regression question, we reran the migrated build with 90 frames,
+matching the older Section 1 frame count. Its receipt is at the same path above;
+the original 60-frame receipt and logs are retained under
+`build/tests/rdna2/coload-60-evidence`. The 90-frame loop averages were
+48.12/47.71 ms idle and 139.20/142.92 ms loaded. The first calls took
+0.82–1.00 seconds. After skipping five calls, mean `Evaluate` was
+34.69/34.49 ms idle and 129.83/131.87 ms loaded. For context, the older
+90-frame pilot's per-frame logs give 34.65 ms idle and 150.25 ms loaded after
+the same skip. It prepared NR during feature creation, and its first call took
+about 15 ms. The two runs differ in frontend, logging, controls, and shared-GPU
+load, so they are not an exact A/B benchmark; they show no substantial loss in
+idle steady-state throughput. Shared-GPU timing varies markedly between runs.
+The new first-frame stall is real and needs its own latency investigation.
+None of these host timings imply 1080p60 with a game running.
 
 ## Next boundary
 

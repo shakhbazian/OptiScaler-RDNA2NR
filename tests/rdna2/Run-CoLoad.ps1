@@ -88,15 +88,22 @@ foreach($run in $runs){
         if($summary.frames -ne $Frames -or -not $summary.finite){throw "$name incomplete summary"}
         $frameMs=@([regex]::Matches($log,'HostTiming frame=\d+ evaluate_ms=([0-9.]+)') |
             ForEach-Object {[double]::Parse($_.Groups[1].Value,[Globalization.CultureInfo]::InvariantCulture)})
-        $ordered=@($frameMs | Select-Object -Skip 5 | Sort-Object)
+        # The host and the logging thread can interleave a diagnostic line, so
+        # retain the sample count rather than treating one torn line as a run failure.
+        if($frameMs.Count -lt $Frames-2){throw "$name has only $($frameMs.Count) per-frame timings"}
+        $warmFrames=@($frameMs | Select-Object -Skip 5)
+        $ordered=@($warmFrames | Sort-Object)
         $records += [ordered]@{
             name=$name;enabled=$run.enabled;loaded=$run.loaded;frames=$Frames;applied=$applied
             loopMs=$summary.evaluateLoopMs;msPerFrame=$summary.evaluateLoopMs/$Frames
+            timingSamples=$frameMs.Count
+            firstEvaluateMs=$frameMs[0]
+            warmMeanEvaluateMs=($warmFrames | Measure-Object -Average).Average
             medianEvaluateMs=$ordered[[int][math]::Floor($ordered.Count/2)]
             finalReadbackMs=$summary.finalReadbackMs
             finalSha256=(Get-FileHash (Join-Path $results 'evaluate_last.rgba.f16')).Hash
         }
-        Write-Output "$name $([math]::Round($summary.evaluateLoopMs/$Frames,2)) ms/frame, applied $applied/$Frames"
+        Write-Output "$name loop=$([math]::Round($summary.evaluateLoopMs/$Frames,2)) ms/frame, warm=$([math]::Round(($warmFrames | Measure-Object -Average).Average,2)) ms/frame, applied $applied/$Frames"
     }finally{
         if($load){
             if(-not $load.Process.HasExited){$load.Process.Kill($true)}
