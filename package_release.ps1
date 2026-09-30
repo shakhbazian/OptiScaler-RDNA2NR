@@ -1,8 +1,11 @@
 # Assemble only allowlisted files. User models and NVIDIA runtimes never enter the build.
 param([ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')][string]$Version='dev',
-      [switch]$SkipBuild)
+      [switch]$SkipBuild,
+      [switch]$NoZip,
+      [string]$PortablePythonHome)
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSCommandPath
+if(-not $PortablePythonHome){throw 'PortablePythonHome is required for an installable release.'}
 . (Join-Path $root 'tools/Enter-Toolchain.ps1') -PlatformToolset v145 -MsvcToolsVersion 14.44
 $stage=Join-Path $root "release/OptiScaler-RDNA2NR-$Version"
 $zip=Join-Path $root "release/OptiScaler-RDNA2NR-$Version.zip"
@@ -25,6 +28,8 @@ $files=[ordered]@{
     'Features.md'='Features.md'
     'Config.md'='Config.md'
     'setup_windows.bat'='setup_windows.bat'
+    'Install-RDNA2NR.ps1'='Install-RDNA2NR.ps1'
+    'Install-RDNA2NR.cmd'='Install-RDNA2NR.cmd'
     'setup_linux.sh'='setup_linux.sh'
     'OptiScaler/libxess.dll'='external/xess/bin/libxess.dll'
     'OptiScaler/libxess_dx11.dll'='external/xess/bin/libxess_dx11.dll'
@@ -47,6 +52,12 @@ foreach($entry in $files.GetEnumerator()){
     $source=Join-Path $root $entry.Value
     if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw "Missing release input: $source"}
 }
+$converterFiles=@('write_runtime_package.py','model_weight_provider.py','weights_ht.py',
+    'model_schemas.py','qmma_layout.py','research_layouts.py')
+foreach($name in $converterFiles){
+    $source=Join-Path $root "tools/model_converter/$name"
+    if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw "Missing converter source: $source"}
+}
 $frontendExports=& dumpbin.exe /nologo /exports (Join-Path $root $files['OptiScaler.dll'])
 $hipExports=& dumpbin.exe /nologo /exports (Join-Path $root $files['dlssnr_hip_scheduled_bridge.dll'])
 $frontendText=$frontendExports -join "`n"
@@ -68,13 +79,23 @@ foreach($entry in $files.GetEnumerator()){
     New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $root $entry.Value) -Destination $destination
 }
+$converterStage=Join-Path $stage 'tools/model_converter'
+New-Item -ItemType Directory -Path $converterStage -Force | Out-Null
+foreach($name in $converterFiles){
+    Copy-Item -LiteralPath (Join-Path $root "tools/model_converter/$name") -Destination (Join-Path $converterStage $name)
+}
+if($PortablePythonHome){
+    & (Join-Path $root 'tools/Stage-PortablePython.ps1') -PythonHome $PortablePythonHome -Destination (Join-Path $stage 'tools/python')
+    if($LASTEXITCODE -ne 0){throw 'Portable Python staging failed.'}
+}
 $ini=$ini -replace '(?m)^; Experimental built-in RTX 40 MFG unlock[^\r\n]*\r?\n',''
 $ini=$ini -replace '(?m)^AdaMfgUnlock=[^\r\n]*\r?\n',''
 $ini=$ini -replace '(?ms)^; Frame timing fix for the extra frames.*?^AdaFlipMeteringPatch=[^\r\n]*\r?\n',''
 [IO.File]::WriteAllText((Join-Path $stage 'OptiScaler.ini'),$ini,[Text.UTF8Encoding]::new($false))
-@('No NVIDIA model or converted weights are included.',
-  'The gfx1030 HIP backend requires a compatible AMD driver runtime.',
-  'Convert your own source DLL locally before enabling RDNA2 NR.') |
+@('Run Install-RDNA2NR.cmd to select a game folder and your own original nvngx_dlssnr.dll.',
+  'The installer parses the DLL as data and creates the private model package locally.',
+  'No NVIDIA model or converted weights are included.',
+  'The gfx1030 HIP backend requires a compatible AMD driver runtime.') |
     Set-Content -LiteralPath (Join-Path $stage 'MODEL-SETUP.txt') -Encoding utf8
 $unexpected=@(Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object {
     $_.Name -match '(?i)\.nrwgt$|^nvngx_dlssnr\.dll$|^amdhip64_6\.dll$|^amd_comgr_2\.dll$'
@@ -85,5 +106,7 @@ $checksums=Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullNa
     '{0} *{1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash,$relative
 }
 [IO.File]::WriteAllLines((Join-Path $stage 'SHA256SUMS.txt'),$checksums,[Text.UTF8Encoding]::new($false))
-Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
-Write-Output "Created $zip"
+if(-not $NoZip){
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
+    Write-Output "Created $zip"
+}else{Write-Output "Created stage $stage"}
