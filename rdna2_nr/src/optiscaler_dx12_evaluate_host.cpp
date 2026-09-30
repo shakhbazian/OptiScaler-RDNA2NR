@@ -182,7 +182,7 @@ int wmain(int argc,wchar_t** argv) try {
     const unsigned outputScale=GetEnvironmentVariableW(L"NR_HOST_NATIVE_OUTPUT",nativeOutput,4)==1&&
                                nativeOutput[0]==L'1'?1u:2u;
     Require(frames>=3&&frames<=64,"bounded diagnostic frame count");
-    Require(scenario==L"rgba8"||scenario==L"rgba32"||scenario==L"r11"||scenario==L"standard"||scenario==L"write_immediate"||scenario==L"exposure"||scenario==L"apply_off"||scenario==L"transfer_zero"||scenario==L"batch"||scenario==L"reuse"||scenario==L"early_reset"||scenario==L"scope"||scenario==L"stream"||scenario==L"paced_stream"||scenario==L"recreate"||scenario==L"queue_switch"||scenario==L"resize"||scenario==L"drs"||scenario==L"create1_alias"||scenario==L"hdr"||scenario==L"subrect_bypass"||scenario==L"bundle_bypass"||scenario==L"unknown_motion_state"||scenario==L"device_reinit"||scenario==L"controls"||scenario==L"toggle"||scenario==L"temporal_toggle"||scenario==L"wrapper"||scenario==L"wrapper_bypass"||scenario==L"motion32_bypass","host scenario");
+    Require(scenario==L"present_queue"||scenario==L"rgba8"||scenario==L"rgba32"||scenario==L"r11"||scenario==L"standard"||scenario==L"write_immediate"||scenario==L"exposure"||scenario==L"apply_off"||scenario==L"transfer_zero"||scenario==L"batch"||scenario==L"reuse"||scenario==L"early_reset"||scenario==L"scope"||scenario==L"stream"||scenario==L"paced_stream"||scenario==L"recreate"||scenario==L"queue_switch"||scenario==L"resize"||scenario==L"drs"||scenario==L"create1_alias"||scenario==L"hdr"||scenario==L"subrect_bypass"||scenario==L"bundle_bypass"||scenario==L"unknown_motion_state"||scenario==L"device_reinit"||scenario==L"controls"||scenario==L"toggle"||scenario==L"temporal_toggle"||scenario==L"wrapper"||scenario==L"wrapper_bypass"||scenario==L"motion32_bypass","host scenario");
     Require(mode<=4,"host mode");
     Require(!(scenario==L"stream"&&frames>3&&mode>=3),"reference has three in-flight slots");
     Require(scenario!=L"recreate"||frames>=4,"recreate requires four frames");
@@ -273,6 +273,17 @@ int wmain(int argc,wchar_t** argv) try {
     const auto shutdown=Entry<ShutdownFn>(module,"NVSDK_NGX_D3D12_Shutdown");
     Require(init(0x1337,L".",device.Get(),static_cast<NVSDK_NGX_Version>(0x15),nullptr)==
             NVSDK_NGX_Result_Success,"NGX D3D12 init");
+    // The diagnostic DLL exposes the same assignment made by swapchain/FG
+    // integration. Keep the host isolated from unrelated injection hooks.
+    ComPtr<ID3D12CommandQueue> presentQueue;
+    if(scenario==L"present_queue"){
+        D3D12_COMMAND_QUEUE_DESC qdesc{};
+        Hr(device->CreateCommandQueue(&qdesc,IID_PPV_ARGS(&presentQueue)),"presentation queue");
+        using SetQueueFn=void(*)(ID3D12CommandQueue*);
+        Entry<SetQueueFn>(module,"DlssNrNativeTestSetTimingQueue")(presentQueue.Get());
+        std::printf("NativePresentQueue distinct=%u game=%p present=%p\n",
+            queue.Get()!=presentQueue.Get(),static_cast<void*>(queue.Get()),static_cast<void*>(presentQueue.Get()));
+    }
     NVSDK_NGX_Parameter* params=nullptr;
     Require(allocate(&params)==NVSDK_NGX_Result_Success&&params,"NGX D3D12 parameters");
     params->Set(NVSDK_NGX_Parameter_Width,width);
@@ -646,6 +657,7 @@ int wmain(int argc,wchar_t** argv) try {
     std::printf("NativeCoverage mode=%u applied=%llu debug_clean=1 debug_layer=%u\n",mode,static_cast<unsigned long long>(applied()-initiallyApplied),debugEnabled?1u:0u);
     std::printf("PASS OptiScaler native DX12 Evaluate source=%ux%u output=%ux%u frames=%u sha256=%s finite=1\n",
         width,height,width*outputScale,height*outputScale,frames,Sha256(all.data(),all.size()*sizeof(Rgba16)).c_str());
+
     if(scenario==L"device_reinit"){
         firstDeviceIdentity=device.Get();
         std::array<wchar_t*,8> second{};

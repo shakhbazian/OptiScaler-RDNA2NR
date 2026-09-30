@@ -213,7 +213,7 @@ ShaderPass_Dx12 MakeDlssNrPass(DlssNr_Dx12& shader, ID3D12Device* device, ID3D12
                     DlssNr::NrBackendSelection::AmdHip || DlssNr::Native::FrontendActive())
                 return dispatch(commandList, nullptr);
 
-            if (!DlssNr::Native::FrontendSessionReady(parameters, beforeUpscale, device, timingQueue))
+            if (!DlssNr::Native::FrontendSessionReady(parameters, beforeUpscale, commandList))
             {
                 // The first qualified submission discovers the real game queue
                 // and warms HIP. Keep the colour frontend off that raw frame:

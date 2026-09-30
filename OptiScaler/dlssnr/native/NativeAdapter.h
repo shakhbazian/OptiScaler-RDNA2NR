@@ -25,8 +25,8 @@ bool PrepareOwned(std::uint64_t,ID3D12Device*,ID3D12CommandQueue*,unsigned,unsig
 std::uint64_t AppliedFrames() noexcept;
 std::uint64_t BypassedFrames() noexcept;
 bool SessionReady() noexcept;
-bool FrontendSessionReady(NVSDK_NGX_Parameter*, bool beforeUpscale, ID3D12Device*,
-                          ID3D12CommandQueue*) noexcept;
+bool FrontendSessionReady(NVSDK_NGX_Parameter*, bool beforeUpscale,
+                          ID3D12GraphicsCommandList*) noexcept;
 const char* Mark(ID3D12GraphicsCommandList* list,NVSDK_NGX_Parameter* parameters,bool beforeUpscale,
                  bool warmOnly=false,bool interop=false) noexcept;
 // Records the shared codec privately. Only a fully recorded model+resolve is

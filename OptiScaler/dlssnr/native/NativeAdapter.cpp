@@ -264,16 +264,25 @@ EvaluationScope::EvaluationScope(std::uint64_t feature,bool hdr):previous(curren
     currentEvaluation=value.get();context=value.release();
 }
 EvaluationScope::~EvaluationScope(){currentEvaluation=static_cast<Evaluation*>(previous);delete static_cast<Evaluation*>(context);}
-bool FrontendSessionReady(NVSDK_NGX_Parameter* params,bool before,ID3D12Device* device,
-                          ID3D12CommandQueue* queue)noexcept{
-    if(!params||!currentEvaluation||!currentEvaluation->feature||!device)return false;
+bool FrontendSessionReady(NVSDK_NGX_Parameter* params,bool before,
+                          ID3D12GraphicsCommandList* list)noexcept{
+    try{
+    if(!params||!currentEvaluation||!currentEvaluation->feature||!list)return false;
+    auto side=FindMarkerList(list);
+    if(!side)return false;
     ID3D12Resource* target=nullptr;
     params->Get(before?NVSDK_NGX_Parameter_Color:NVSDK_NGX_Parameter_Output,&target);
     if(!target)return false;
     const auto desc=target->GetDesc();
     if(desc.Width>UINT_MAX||desc.Height>UINT_MAX)return false;
-    return SessionReadyFor(device,queue,static_cast<unsigned>(desc.Width),desc.Height,
+    // The upscaler's timing queue can be the swapchain/FG queue. It does not
+    // identify the queue that will submit this list. Admit recording on the
+    // observed native device; Submit checks the actual queue before GPU work
+    // and warms a replacement session if it changed. This also avoids comparing
+    // a game's COM device wrapper against the recorder's native device pointer.
+    return SessionReadyFor(side->device.Get(),nullptr,static_cast<unsigned>(desc.Width),desc.Height,
                            currentEvaluation->feature->cookie,before);
+    }catch(...){return false;}
 }
 bool PrepareOwned(std::uint64_t id,ID3D12Device* device,ID3D12CommandQueue* queue,
                   unsigned width,unsigned height,bool before)noexcept{
@@ -567,6 +576,9 @@ void ReleaseFeature(std::uint64_t feature)noexcept{
 }
 void Shutdown()noexcept{enabled=false;NativeQueue::SetPrepare(nullptr);HistoryDiscontinuity();StopSession();}
 #ifdef NR_NATIVE_TEST_HOOKS
+extern "C" __declspec(dllexport) void DlssNrNativeTestSetTimingQueue(ID3D12CommandQueue* queue){
+    State::Instance().currentCommandQueue=queue;
+}
 // Diagnostic builds only: emulate the menu's configuration assignment between
 // headless Evaluate calls. No failure switch or toggle export ships in Release.
 extern "C" __declspec(dllexport) void DlssNrNativeTestSetEnabled(unsigned value){

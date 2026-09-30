@@ -880,7 +880,9 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="dlssnr\DlssNrFeature_Vk.cpp" />
     <ClCompile Include="dlssnr\DlssNrFinished_Vk.cpp" />
     <ClCompile Include="dlssnr\DlssNr_Proxy.cpp" />
-    <ClCompile Include="dlssnr\native\NativeAdapter.cpp" />
+    <ClCompile Include="dlssnr\native\NativeAdapter.cpp">
+      <PreprocessorDefinitions Condition="'$(NrNativeTestHooks)'=='true'">NR_NATIVE_TEST_HOOKS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Include="dlssnr\native\NativeSession.cpp" />
     <ClCompile Include="dlssnr\NrBackendSelection.cpp" />
     <ClCompile Include="dlssnr\DlssNr_Menu.cpp" />
