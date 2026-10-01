@@ -4,7 +4,9 @@
 
 ## Supported source
 
-The converter accepts one original NVIDIA-signed `nvngx_dlssnr.dll`, identified by its SHA-256:
+Use the original NVIDIA-signed **DLSS 5 Neural Rendering 310.8.0.0** DLL, `nvngx_dlssnr.dll`. You can obtain it from the installation directory of a game that includes DLSS 5 Neural Rendering; look for this filename in the game's files.
+
+The converter accepts the build with this SHA-256:
 
 ```text
 E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E

@@ -6,16 +6,16 @@
 
 For the AMD backend, you need:
 
-- Windows x64 with DirectX 12. Windows 11 is the tested system.
-- A Radeon with the `gfx1030` architecture. RX 6900 XT with 16 GB VRAM is the tested card; other RDNA2 architectures are not included in this build.
-- An AMD driver providing `amdhip64_6.dll`. Adrenalin 26.8.1 is the tested driver, not a known minimum. Use the [AMD driver download page](https://www.amd.com/en/support/download/drivers.html).
+- Windows x64 with DirectX 12.
+- A Radeon with the `gfx1030` architecture, such as RX 6900 XT. See [hardware compatibility](COMPATIBILITY.md#hardware).
+- [AMD Software: Adrenalin Edition](https://www.amd.com/en/support/download/drivers.html) for Radeon RX 6000, with the HIP 6 runtime.
 - The [Microsoft Visual C++ v14 Redistributable, x64](https://aka.ms/vc14/vc_redist.x64.exe). See Microsoft's [runtime requirements](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
-- Your own [supported original model DLL](MODEL.md#supported-source).
-- A game whose upscaler calls OptiScaler can intercept. DLSS, FSR and XeSS are input APIs; NVIDIA DLSS is not required when using FSR on AMD.
+- Original `nvngx_dlssnr.dll` from **DLSS 5 Neural Rendering 310.8.0.0**. Obtain it from a game's installation that includes DLSS 5 Neural Rendering and check the [supported SHA-256](MODEL.md#supported-source).
+- A game whose DLSS, FSR or XeSS upscaler calls OptiScaler can intercept.
 
-The complete release includes the converter's Python and NumPy. You do not need to install Python, Visual Studio, HIP SDK or rocBLAS to run it. AMD documents the distinction between the driver runtime and developer SDK in its [deployment guidance](https://rocm.docs.amd.com/projects/install-on-windows/en/latest/conceptual/deployment-guidelines.html).
+The HIP runtime is included in the AMD graphics driver; see AMD's [deployment guidance](https://rocm.docs.amd.com/projects/install-on-windows/en/latest/conceptual/deployment-guidelines.html). This build uses the HIP 6 runtime (`amdhip64_6.dll`).
 
-Allow disk space for the extracted release, a converted model of about 278 MiB, and backups of replaced game files. VRAM requirements depend on the game and NR resolution; 16 GB is the tested capacity, not a declared minimum.
+Allow disk space for the extracted release, a converted model of about 278 MiB, and backups of replaced game files. VRAM usage depends on the game and NR resolution.
 
 ## GUI installation
 

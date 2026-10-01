@@ -6,7 +6,7 @@ This fork adds a HIP backend for RDNA2 to [wilsjo2's OptiScaler-DLSSNR](https://
 
 **Developer preview:** NR is working in Cyberpunk 2077 on an RX 6900 XT. Performance is still a major limitation; broad game compatibility and playable frame rates are not guaranteed. DirectX 11 support has been checked in standalone tests, rather than games.
 
-The original network is retained, with selected matrix operations in INT8 and the remaining paths in FP16. This is not a trained replacement network. **You supply the original model DLL; the installer prepares its weights locally. No NVIDIA model or driver runtime is distributed.**
+The original network is retained, with selected matrix operations in INT8 and the remaining paths in FP16. **You supply the original model DLL; the installer prepares its weights locally.**
 
 ## Requirements
 
@@ -14,20 +14,20 @@ For the AMD backend:
 
 | Requirement | What to install or provide |
 | --- | --- |
-| Windows x64 with DirectX 12 | Tested on Windows 11. |
-| A `gfx1030` Radeon GPU | Tested on RX 6900 XT, 16 GB. Other `gfx1030` cards are not yet qualified; this build does not cover every RDNA2 GPU. |
-| AMD driver with the HIP 6 runtime | Install a [compatible AMD graphics driver](https://www.amd.com/en/support/download/drivers.html). Adrenalin 26.8.1 is the tested version, not an established minimum. The runtime must provide `amdhip64_6.dll`. |
+| Windows x64 | DirectX 12 support. |
+| A `gfx1030` Radeon GPU | RX 6900 XT; see [hardware compatibility](docs/COMPATIBILITY.md#hardware). |
+| AMD Software: Adrenalin Edition | Install the [Radeon RX 6000 driver](https://www.amd.com/en/support/download/drivers.html) with the HIP 6 runtime. |
 | Microsoft Visual C++ runtime, x64 | Install the [Visual C++ v14 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) ([x64 download](https://aka.ms/vc14/vc_redist.x64.exe)). |
-| Your own compatible `nvngx_dlssnr.dll` | One source version is supported, identified by its [SHA-256 hash](docs/MODEL.md#supported-source). |
+| DLSS 5 Neural Rendering **310.8.0.0** | Obtain `nvngx_dlssnr.dll` from a game that includes DLSS 5 Neural Rendering. Use the original build matching the [supported SHA-256](docs/MODEL.md#supported-source). |
 | A game with a supported upscaler input | OptiScaler must intercept the game's DLSS, FSR or XeSS calls. Use single-player games. |
 
-**No separate Python, HIP SDK, rocBLAS or Visual Studio installation is needed to use a packaged build.** The converter includes portable Python and NumPy. Allow space for the extracted release, about 278 MiB for the converted model, and backups of any files replaced in the game folder.
+Allow space for the extracted release, about 278 MiB for the converted model, and backups of any files replaced in the game folder.
 
 ## Quick start
 
 1. Close the game. Extract the **complete release archive** into a separate folder.
 2. Run **`Install-RDNA2NR.cmd`**. Select the folder containing the game's actual executable and your original `nvngx_dlssnr.dll`. Keep `dxgi.dll` unless the game's installation guidance calls for another proxy. Click **Install / update**.
-3. Start the game and enable a supported in-game upscaler. **FSR is a valid input on AMD; you do not need to enable NVIDIA DLSS.**
+3. Start the game and enable a supported in-game upscaler. **FSR is a valid input on AMD.**
 4. Press **Insert**, open **DLSS Neural Rendering**, and enable NR. Select **Auto** for the backend. For a less expensive starting point, enable **before upscaling**; keep one pass, 100% working size and **Apply model** enabled.
 5. Wait for model preparation. **AMD HIP (gfx1030)** identifies the backend; **RDNA2 NR active** with a growing frame count confirms that frames are being processed. Toggle NR to compare the image.
 
