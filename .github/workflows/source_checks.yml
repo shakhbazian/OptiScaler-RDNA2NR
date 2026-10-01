@@ -2,7 +2,7 @@ name: Source and documentation checks
 
 on:
   push:
-    branches: [main, codex/rdna2nr]
+    branches: [main, rdna2nr]
   pull_request:
   workflow_dispatch:
 
