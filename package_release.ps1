@@ -1,5 +1,5 @@
 # Assemble only allowlisted files. User models and NVIDIA runtimes never enter the build.
-param([ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')][string]$Version='dev',
+param([ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')][string]$Version=(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'VERSION.txt') -Raw).Trim(),
       [switch]$SkipBuild,
       [switch]$NoZip,
       [string]$PortablePythonHome)
@@ -22,6 +22,7 @@ $files=[ordered]@{
     'OptiScaler.ini'='OptiScaler.ini'
     'README.md'='README.md'
     'Changelog.md'='Changelog.md'
+    'VERSION.txt'='VERSION.txt'
     'LICENSE'='LICENSE'
     'INSTALL-DLSSNR.md'='INSTALL-DLSSNR.md'
     'docs/README.md'='docs/README.md'
@@ -35,7 +36,7 @@ $files=[ordered]@{
     'docs/BUILDING.md'='docs/BUILDING.md'
     'docs/CREDITS.md'='docs/CREDITS.md'
     'docs/upstream/README.md'='docs/upstream/README.md'
-    'docs/release-notes/v0.1.0-preview.1.md'='docs/release-notes/v0.1.0-preview.1.md'
+    'docs/release-notes/r1-0.8.91.md'='docs/release-notes/r1-0.8.91.md'
     'setup_windows.bat'='setup_windows.bat'
     'Install-RDNA2NR.ps1'='Install-RDNA2NR.ps1'
     'Install-RDNA2NR.cmd'='Install-RDNA2NR.cmd'
@@ -88,6 +89,7 @@ foreach($entry in $files.GetEnumerator()){
     New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $root $entry.Value) -Destination $destination
 }
+[IO.File]::WriteAllText((Join-Path $stage 'VERSION.txt'),"$Version`n",[Text.UTF8Encoding]::new($false))
 $converterStage=Join-Path $stage 'tools/model_converter'
 New-Item -ItemType Directory -Path $converterStage -Force | Out-Null
 foreach($name in $converterFiles){

@@ -59,14 +59,19 @@ Reports are written beneath ignored `build/` directories. Source builds do not p
 
 Prepare a full CPython 3.12 x64 installation with NumPy. It must contain `python.exe`, `python312.dll`, `DLLs`, `Lib`, the Python license, and NumPy's library/distribution metadata. An executable path, a virtual environment alone or the minimal embeddable Python ZIP is not the required input.
 
-Use that installation's interpreter to install NumPy, then package with a fresh version label:
+Release versions use `r<release number>-<parent version>`, for example `r1-0.8.91`.
+The parent version identifies the wilsjo2 base. The `r` number increases for every
+release and continues when the parent version changes. `VERSION.txt` supplies the
+default package label; release notes and the changelog use the same version.
+
+Use that installation's interpreter to install NumPy, then package:
 
 ```powershell
 & "C:\Tools\Python312\python.exe" -m pip install numpy
-.\package_release.ps1 -Version "preview-local-1" -PortablePythonHome "C:\Tools\Python312"
+.\package_release.ps1 -PortablePythonHome "C:\Tools\Python312"
 ```
 
-The script builds both DLLs and assembles an allowlisted directory and ZIP in `release/`. `-SkipBuild` reuses existing binaries; use it only after confirming they are the intended production build. `-NoZip` creates the staged directory without an archive. Use a new version label rather than overwriting an archive used for testing.
+The script builds both DLLs and assembles an allowlisted directory and ZIP in `release/`. `-SkipBuild` reuses existing binaries; use it only after confirming they are the intended production build. `-NoZip` creates the staged directory without an archive. Use `-Version "local-1"` for a separate local package rather than overwriting an archive used for testing. The installer records the package version in its installation manifest.
 
 Packaging audits DLL exports and default settings, includes runtime licenses and portable Python/NumPy, and emits file checksums. It excludes NVIDIA model DLLs, converted weights, AMD driver libraries and diagnostic test exports. Runtime preparation remains the user's local installation step.
 

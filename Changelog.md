@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.0-preview.1
+## r1-0.8.91
 
-First public developer preview of OptiScaler-RDNA2NR, based on wilsjo2's OptiScaler-DLSSNR v0.8.91.
+First public release of OptiScaler-RDNA2NR, based on wilsjo2's OptiScaler-DLSSNR v0.8.91.
 
 - AMD HIP execution of the original NR network on `gfx1030`, using mixed INT8/FP16 arithmetic.
 - One-pass NR before or after upscaling on D3D12, and through OptiScaler's D3D11 w/Dx12 upscaler bridge.
@@ -11,4 +11,4 @@ First public developer preview of OptiScaler-RDNA2NR, based on wilsjo2's OptiSca
 - Queue, resolution and feature-lifetime handling, with raw-frame fallback for unqualified submissions.
 - User documentation and source-check automation.
 
-NR application in Cyberpunk 2077 is confirmed on RX 6900 XT. Performance remains a limitation; D3D11 has standalone coverage and HIP Vulkan support is not implemented. See [compatibility](docs/COMPATIBILITY.md) and the [release notes](docs/release-notes/v0.1.0-preview.1.md).
+NR application in Cyberpunk 2077 is confirmed on RX 6900 XT. Performance remains a limitation; D3D11 has standalone coverage and HIP Vulkan support is not implemented. See [compatibility](docs/COMPATIBILITY.md) and the [release notes](docs/release-notes/r1-0.8.91.md).

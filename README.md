@@ -4,7 +4,7 @@ DLSS Neural Rendering on Radeon, integrated into OptiScaler.
 
 This fork adds a HIP backend for RDNA2 to [wilsjo2's OptiScaler-DLSSNR](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass). It keeps OptiScaler's DLSS/FSR/XeSS routing, frame-generation features and ordinary NVIDIA NGX compatibility. NR can run before or after upscaling, with controls for lighting, detail and colour.
 
-**Developer preview:** NR is working in Cyberpunk 2077 on an RX 6900 XT. Performance is still a major limitation; broad game compatibility and playable frame rates are not guaranteed. DirectX 11 support has been checked in standalone tests, rather than games.
+**Research project:** NR is working in Cyberpunk 2077 on an RX 6900 XT. Performance is still a major limitation; broad game compatibility and playable frame rates are not guaranteed. DirectX 11 support has been checked in standalone tests, rather than games.
 
 The original network is retained, with selected matrix operations in INT8 and the remaining paths in FP16. **You supply the original model DLL; the installer prepares its weights locally.**
 

@@ -36,7 +36,7 @@ Resolution changes can require a new resource/session preparation. During that t
 
 ## Performance
 
-This is a developer preview. No playable frame-rate target is guaranteed. The original network remains computationally expensive even with the mixed INT8/FP16 executor.
+This is a research project. No playable frame-rate target is guaranteed. The original network remains computationally expensive even with the mixed INT8/FP16 executor.
 
 Pre-upscale NR usually costs less because it processes the internal render size. Post-upscale NR processes the upscaler output. A game's lower render resolution or a different SR preset can reduce the workload; HIP's own working-size setting remains 100%.
 

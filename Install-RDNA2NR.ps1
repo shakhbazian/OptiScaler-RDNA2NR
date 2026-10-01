@@ -43,6 +43,14 @@ function Get-Hash([string]$Path) {
         $stream.Dispose()
     }
 }
+function Get-ReleaseVersion([string]$Root) {
+    $path = Join-Path $Root 'VERSION.txt'
+    # Older packages have no version file; their install/update path still works.
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        return [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8).Trim()
+    }
+    return $null
+}
 function Assert-Within([string]$Root, [string]$Path) {
     $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
     $pathFull = [IO.Path]::GetFullPath($Path)
@@ -88,7 +96,7 @@ function Find-Python([string]$Explicit, [string]$Root) {
         $found = Get-Command $command -ErrorAction SilentlyContinue
         if ($found -and $found.Source) { return $found.Source }
     }
-    throw 'Python 3.10+ with NumPy is required for this preview. Select python.exe with -PythonPath.'
+    throw 'Python 3.10+ with NumPy is required for model conversion. Select python.exe with -PythonPath.'
 }
 function Resolve-ModelRoot([string]$Override) {
     if ($Override) { return [IO.Path]::GetFullPath($Override) }
@@ -147,6 +155,7 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
         throw 'Select the folder containing the game executable.'
     }
     $rootFull = [IO.Path]::GetFullPath($Root)
+    $releaseVersion = Get-ReleaseVersion $rootFull
     $files = @(Get-InstallFiles $rootFull $Proxy)
     $old = Read-Manifest $gameFull
     if ($old -and $old.proxyName -ne $Proxy) {
@@ -213,6 +222,7 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
             $receipt += [pscustomobject]$entry
         }
         $record = [ordered]@{ schemaVersion = 1; product = 'OptiScaler-RDNA2NR';
+            releaseVersion = $releaseVersion;
             installId = $installId; proxyName = $Proxy; modelSha256 = $PackageHash;
             modelPath = $model; files = $receipt }
         $pendingManifest = "$manifestPath.pending"
@@ -233,6 +243,7 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
         if (Test-Path -LiteralPath $transaction) { Remove-Item -LiteralPath $transaction -Recurse -Force }
     }
     Write-Output "Installed and verified $($receipt.Count) files in $gameFull"
+    if ($releaseVersion) { Write-Output "Release: $releaseVersion" }
     Write-Output "Proxy: $Proxy; model: $model"
 }
 function Verify-Product([string]$Game) {
@@ -249,6 +260,7 @@ function Verify-Product([string]$Game) {
         (Get-Item -LiteralPath $record.modelPath).Length -ne $PackageBytes -or
         (Get-Hash $record.modelPath) -ne $PackageHash) { throw 'Installed model cache differs.' }
     Write-Output "Verified $($record.files.Count) files and model package."
+    if ($record.releaseVersion) { Write-Output "Release: $($record.releaseVersion)" }
 }
 function Uninstall-Product([string]$Game) {
     $gameFull = [IO.Path]::GetFullPath($Game)
@@ -282,6 +294,8 @@ function Show-Installer {
     [System.Windows.Forms.Application]::EnableVisualStyles()
     $form = New-Object System.Windows.Forms.Form
     $form.Text = 'OptiScaler-RDNA2NR setup'
+    $releaseVersion = Get-ReleaseVersion $ReleaseRoot
+    if ($releaseVersion) { $form.Text += " - $releaseVersion" }
     $form.Size = New-Object System.Drawing.Size(660,350)
     $form.StartPosition = 'CenterScreen'
     $form.MinimumSize = $form.Size
