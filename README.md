@@ -25,7 +25,7 @@ Allow space for the extracted release, about 278 MiB for the converted model, an
 
 ## Quick start
 
-1. Close the game. Extract the **complete release archive** into a separate folder.
+1. Download the installer ZIP from [Releases](https://github.com/shakhbazian/OptiScaler-RDNA2NR/releases). Close the game and extract the **complete archive** into a separate folder.
 2. Run **`Install-RDNA2NR.cmd`**. Select the folder containing the game's actual executable and your original `nvngx_dlssnr.dll`. Keep `dxgi.dll` unless the game's installation guidance calls for another proxy. Click **Install / update**.
 3. Start the game and enable a supported in-game upscaler. **FSR is a valid input on AMD.**
 4. Press **Insert**, open **DLSS Neural Rendering**, and enable NR. Select **Auto** for the backend. For a less expensive starting point, enable **before upscaling**; keep one pass, 100% working size and **Apply model** enabled.

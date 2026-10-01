@@ -72,6 +72,8 @@ Packaging audits DLL exports and default settings, includes runtime licenses and
 
 ## Standalone checks
 
+Before publishing source changes, run `python tools/check_release_source.py`. It checks public documentation links and rejects tracked model/driver assets. GitHub runs the same check; GPU builds and qualification remain separate.
+
 These tests execute the source-built hosts and HIP backend on the GPU, outside a game. They need the compatible AMD runtime and a private model package. Start with:
 
 ```powershell
