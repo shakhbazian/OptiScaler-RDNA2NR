@@ -27,12 +27,16 @@ def main():
         ["git", "ls-files", "-z"], cwd=ROOT
     ).decode("utf-8").split("\0")
     errors = []
+    version = (ROOT / "VERSION.txt").read_text(encoding="utf-8-sig").strip()
+    resource = (ROOT / "OptiScaler/resource.h").read_text(encoding="utf-8-sig")
+    if f'#define VER_RDNA2NR_VERSION "{version}"' not in resource:
+        errors.append("VERSION.txt and the frontend release label differ.")
     forbidden_names = {"nvngx_dlssnr.dll", "amdhip64_6.dll", "amdhip64_7.dll", "amd_comgr_2.dll", "amd_comgr_3.dll"}
     for name in filter(None, tracked):
         path = Path(name)
         if path.suffix.lower() == ".nrwgt" or path.name.lower() in forbidden_names:
             errors.append(f"Private model or driver asset is tracked: {name}")
-        if path.parts[0].lower() in {"build", "release", "local_assets"}:
+        if path.parts[0].lower() in {"build", "release", "local_assets", "research"}:
             errors.append(f"Local artifact directory is tracked: {name}")
 
     guides = [ROOT / "README.md", ROOT / "INSTALL-DLSSNR.md", ROOT / "Changelog.md"]

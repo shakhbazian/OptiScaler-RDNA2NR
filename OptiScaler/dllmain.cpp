@@ -1727,8 +1727,18 @@ void CheckMemoryForProxies()
 
     XeSSProxy::InitXeSS();
     XeSSProxy::InitXeSSDx11();
-    XeFGProxy::InitXeFG();
-    XeLLProxy::InitXeLL();
+    const bool xefgReady = XeFGProxy::InitXeFG();
+    const bool xellReady = XeLLProxy::InitXeLL();
+
+    // Resolve auto before the first swapchain; an explicit choice remains the user's.
+    auto& config = *Config::Instance();
+    if (!config.FGOutput.has_value() && config.FGInput.value_or_default() != FGInput::NvngxFG &&
+        (!xefgReady || !xellReady))
+    {
+        config.FGOutput.set_volatile_value(FGOutput::NoFG);
+        State::Instance().activeFgOutput = FGOutput::NoFG;
+        LOG_INFO("XeFG auto selection unavailable; keeping ordinary presentation");
+    }
 
     XellHooks::Hook();
 

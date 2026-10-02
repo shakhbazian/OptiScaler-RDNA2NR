@@ -4,9 +4,19 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#if defined(NR_SCHEDULED_MIXED) && !defined(NR_OPTIMIZED_CHECKPOINT)
+#error The current scheduled graph requires NR_OPTIMIZED_CHECKPOINT.
+#endif
 #ifdef NR_PINNED_MIXED
-#if !defined(NR_DIRECT_PUBLICATION) || NR_DIRECT_PUBLICATION != 1 || !defined(NR_ATTENTION_DOT2) || NR_ATTENTION_DOT2 != 0
-#error The accepted pinned profile requires direct publication and the unpaired attention contract.
+#if !defined(NR_DIRECT_PUBLICATION) || NR_DIRECT_PUBLICATION != 1 || !defined(NR_ATTENTION_DOT2)
+#error The accepted pinned profile requires direct publication and an explicit attention contract.
+#endif
+#if defined(NR_OPTIMIZED_CHECKPOINT)
+#if NR_ATTENTION_DOT2 != 1 || !defined(NR_FIXED_ROW_THREADS) || NR_FIXED_ROW_THREADS != 8
+#error The optimized checkpoint requires paired attention and eight C32 row workers.
+#endif
+#elif NR_ATTENTION_DOT2 != 0
+#error The released mixed profile requires unpaired attention.
 #endif
 #endif
 #if defined(NR_SCHEDULED_MIXED) && !defined(NR_PINNED_MIXED)
@@ -18,8 +28,17 @@
 namespace NrExecution {
 constexpr std::uint32_t AcceptedMixedId = 0x20260924u;
 constexpr const char* AcceptedMixedName = "mixed-v5-group64-c32-fp16-split4-20260924";
+// The execution profile can change without changing the model-package format.
+constexpr std::uint32_t OptimizedCheckpointId = 0x20261002u;
+constexpr const char* OptimizedCheckpointName = "static-c32-long-int32-wave-qkv64-20261002";
+#ifdef NR_OPTIMIZED_CHECKPOINT
+constexpr auto CompiledProfileId = OptimizedCheckpointId;
+#else
+constexpr auto CompiledProfileId = AcceptedMixedId;
+#endif
 struct Setting { const char* name; const char* value; };
 inline constexpr Setting AcceptedMixed[] = {
+    {"NR_RESEARCH_STATIC_MASK", "0"}, {"NR_RESEARCH_LONG_MASK", "1"},
     {"RDNA2_GLOBAL_INT8", "64"}, {"RDNA2_GROUPED_INT8_SCOPE", "mixed-v5"},
     {"RDNA2_C32_INT8", "0"}, {"RDNA2_GLOBAL_GROUP128", "0"},
     {"RDNA2_BRANCH_RESIDENT", "1"}, {"RDNA2_BRANCH_PROJECT_FUSED", "1"},

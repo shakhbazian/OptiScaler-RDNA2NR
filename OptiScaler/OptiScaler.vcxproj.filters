@@ -1663,6 +1663,7 @@
     <ClInclude Include="dlssnr\PassProfiles.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="dlssnr\DlssNr_ModelParameters.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="shaders\dlssnr\DlssNr_ActiveColor.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\WorkingResolution.h"><Filter>Header Files</Filter></ClInclude>
     <ClCompile Include="shaders\dlssnr\DlssNr_Dx12.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClInclude Include="shaders\dlssnr\DlssNr_GpuTime.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="shaders\dlssnr\DlssNr_Guides.h"><Filter>Header Files</Filter></ClInclude>

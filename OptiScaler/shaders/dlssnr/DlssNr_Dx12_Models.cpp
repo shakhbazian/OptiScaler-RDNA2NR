@@ -116,7 +116,7 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
     }
 
     if (reduced && !spatial && nr.colorSmall == nullptr)
-        nr.colorSmall = CreateScratch(device, desc.Format, workWidth, workHeight);
+        nr.colorSmall = CreateScratch(device, proxyFormat, workWidth, workHeight);
 
     // The down-leg target is native (the answer is brought back to frame size before the resolve).
     if (workScale > 1.0f && !spatial && nr.outputNative == nullptr)

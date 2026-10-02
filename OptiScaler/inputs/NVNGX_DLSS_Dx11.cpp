@@ -550,11 +550,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_CreateFeature(ID3D11DeviceContext
 
     if (InFeatureID == NVSDK_NGX_Feature_SuperSampling)
     {
-        Upscaler upscalerChoice = Upscaler::FSR22; // Default FSR 2.2.1
-
-        // If original NVNGX available use DLSS as base upscaler
-        if (IdentifyGpu::getPrimaryGpu().dlssCapable && NVNGXProxy::IsDx11Inited())
-            upscalerChoice = Upscaler::DLSS;
+        Upscaler upscalerChoice = Upscaler::FFX_on12; // The bridge also exposes NR.
 
         if (Config::Instance()->Dx11Upscaler.has_value())
             upscalerChoice = Config::Instance()->Dx11Upscaler.value();

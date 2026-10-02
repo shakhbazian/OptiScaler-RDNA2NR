@@ -4,7 +4,7 @@ DLSS Neural Rendering on Radeon, integrated into OptiScaler.
 
 This fork adds a HIP backend for RDNA2 to [wilsjo2's OptiScaler-DLSSNR](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass). It keeps OptiScaler's DLSS/FSR/XeSS routing, frame-generation features and ordinary NVIDIA NGX compatibility. NR can run before or after upscaling, with controls for lighting, detail and colour.
 
-**Research project:** NR is working in Cyberpunk 2077 on an RX 6900 XT. Performance is still a major limitation; broad game compatibility and playable frame rates are not guaranteed. DirectX 11 support has been checked in standalone tests, rather than games.
+**Research project:** NR is working in Cyberpunk 2077 on an RX 6900 XT. A user test reached approximately **45 FPS at 1440p**, with FSR in Performance mode and NR at **75% before upscaling**. This is a reported game result, rather than a controlled benchmark. DirectX 11 support has been checked in standalone tests.
 
 The original network is retained, with selected matrix operations in INT8 and the remaining paths in FP16. **You supply the original model DLL; the installer prepares its weights locally.**
 
@@ -28,12 +28,14 @@ Allow space for the extracted release, about 278 MiB for the converted model, an
 1. Download the installer ZIP from [Releases](https://github.com/shakhbazian/OptiScaler-RDNA2NR/releases). Close the game and extract the **complete archive** into a separate folder.
 2. Run **`Install-RDNA2NR.cmd`**. Select the folder containing the game's actual executable and your original `nvngx_dlssnr.dll`. Keep `dxgi.dll` unless the game's installation guidance calls for another proxy. Click **Install / update**.
 3. Start the game and enable a supported in-game upscaler. **FSR is a valid input on AMD.**
-4. Press **Insert**, open **DLSS Neural Rendering**, and enable NR. Select **Auto** for the backend. For a less expensive starting point, enable **before upscaling**; keep one pass, 100% working size and **Apply model** enabled.
+4. Press **Insert**, open **DLSS Neural Rendering**, and enable NR. Select **Auto** for the backend. The starting configuration is **Standard**, **75% Model resolution**, **before upscaling**, with one pass and **Apply model** enabled.
 5. Wait for model preparation. **AMD HIP (gfx1030)** identifies the backend; **RDNA2 NR active** with a growing frame count confirms that frames are being processed. Toggle NR to compare the image.
 
-The installer converts and verifies the model before replacing game files. It keeps an existing `OptiScaler.ini`, backs up replaced files, and reuses a verified model cache on subsequent installations. A fresh configuration leaves NR disabled until you enable it.
+To lower the network's working resolution while keeping the frame size, adjust **Model resolution**. At 50%, a 1080p NR input runs at 540p. See [settings](docs/SETTINGS.md#model-resolution) for placement and composition choices.
 
-For DirectX 11, choose an upscaler marked **w/Dx12**; for example, `Dx11Upscaler=fsr22_12` in the `[Upscalers]` section. See [installation](docs/INSTALLATION.md) for updates, removal and command-line use, or [troubleshooting](docs/TROUBLESHOOTING.md) if NR is inactive.
+The installer converts and verifies the model before replacing game files. It keeps an existing `OptiScaler.ini`, backs up replaced files, and reuses a verified model cache on subsequent installations. A fresh configuration selects **FSR 3** when available and **XeFG** when its libraries are present. Enable frame generation in the OptiScaler menu when you want to use it. NR stays disabled until you enable it.
+
+For DirectX 11, choose an upscaler marked **w/Dx12**; for example, `Dx11Upscaler=ffx_12` in the `[Upscalers]` section. See [installation](docs/INSTALLATION.md) for updates, removal and command-line use, or [troubleshooting](docs/TROUBLESHOOTING.md) if NR is inactive.
 
 ## Supported NR paths
 

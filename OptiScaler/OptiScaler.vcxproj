@@ -876,6 +876,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="inputs\NVNGX_DLSS_Dx11.cpp" />
     <ClCompile Include="shaders\dlssnr\DlssNr_Dx12.cpp" />
     <ClInclude Include="shaders\dlssnr\DlssNr_ActiveColor.h" />
+    <ClInclude Include="dlssnr\WorkingResolution.h"></ClInclude>
     <ClCompile Include="shaders\dlssnr\DlssNr_Vk.cpp" />
     <ClCompile Include="dlssnr\DlssNrFeature_Vk.cpp" />
     <ClCompile Include="dlssnr\DlssNrFinished_Vk.cpp" />

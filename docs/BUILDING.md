@@ -91,4 +91,8 @@ The smoke test builds the hosts and binaries, produces deterministic input, and 
 
 The optional `Build-OptiScaler.ps1 -NativeTestHooks` build adds source-test hooks for queue diagnostics. It is not a release frontend. Rebuild without that switch before packaging; the packager rejects diagnostic exports.
 
+Use `Run-Smoke.ps1 -WorkingScale 0.75` for reduced-resolution codec parity, `-Scenario notifier` for destruction-notification compatibility, or `-WorkingScale 2 -FunctionalOnly` for supersampling admission. `Run-Dx11.ps1` also accepts `-WorkingScale`. Both accept explicit `-FrontendPath` and `-CompanionPath` for isolated builds.
+
+To keep large build artifacts outside the checkout, both build scripts accept `-OutputRoot`. Package these binaries with `package_release.ps1 -SkipBuild -FrontendPath <DLL> -HipBackendPath <DLL> -OutputRoot <directory> -PortablePythonHome <Python directory>`.
+
 For performance work, compare paired, uninstrumented full-frame runs. Treat stage profiling as a diagnostic aid, because instrumentation can alter the measured workload.

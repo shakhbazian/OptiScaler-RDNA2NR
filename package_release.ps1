@@ -2,23 +2,31 @@
 param([ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')][string]$Version=(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'VERSION.txt') -Raw).Trim(),
       [switch]$SkipBuild,
       [switch]$NoZip,
-      [string]$PortablePythonHome)
+      [string]$PortablePythonHome,
+      [string]$OutputRoot='release',
+      [string]$FrontendPath='x64/Release/OptiScaler.dll',
+      [string]$HipBackendPath='build/hip-gfx1030/dlssnr_hip_scheduled_bridge.dll')
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSCommandPath
 if(-not $PortablePythonHome){throw 'PortablePythonHome is required for an installable release.'}
 . (Join-Path $root 'tools/Enter-Toolchain.ps1') -PlatformToolset v145 -MsvcToolsVersion 14.44
-$stage=Join-Path $root "release/OptiScaler-RDNA2NR-$Version"
-$zip=Join-Path $root "release/OptiScaler-RDNA2NR-$Version.zip"
+$destinationRoot=if([IO.Path]::IsPathRooted($OutputRoot)){$OutputRoot}else{Join-Path $root $OutputRoot}
+$stage=Join-Path $destinationRoot "OptiScaler-RDNA2NR-$Version"
+$zip=Join-Path $destinationRoot "OptiScaler-RDNA2NR-$Version.zip"
 if((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zip)){
     throw 'Choose a new version: an existing release is never overwritten.'
 }
 if(-not $SkipBuild){
+    if($FrontendPath -ne 'x64/Release/OptiScaler.dll' -or
+       $HipBackendPath -ne 'build/hip-gfx1030/dlssnr_hip_scheduled_bridge.dll'){
+        throw 'Custom binary paths require -SkipBuild and separately built production DLLs.'
+    }
     & (Join-Path $root 'tools/Build-HipBackend.ps1')
     & (Join-Path $root 'tools/Build-OptiScaler.ps1')
 }
 $files=[ordered]@{
-    'OptiScaler.dll'='x64/Release/OptiScaler.dll'
-    'dlssnr_hip_scheduled_bridge.dll'='build/hip-gfx1030/dlssnr_hip_scheduled_bridge.dll'
+    'OptiScaler.dll'=$FrontendPath
+    'dlssnr_hip_scheduled_bridge.dll'=$HipBackendPath
     'OptiScaler.ini'='OptiScaler.ini'
     'README.md'='README.md'
     'Changelog.md'='Changelog.md'
@@ -37,6 +45,7 @@ $files=[ordered]@{
     'docs/CREDITS.md'='docs/CREDITS.md'
     'docs/upstream/README.md'='docs/upstream/README.md'
     'docs/release-notes/r1-0.8.91.md'='docs/release-notes/r1-0.8.91.md'
+    'docs/release-notes/r2-0.8.91.md'='docs/release-notes/r2-0.8.91.md'
     'setup_windows.bat'='setup_windows.bat'
     'Install-RDNA2NR.ps1'='Install-RDNA2NR.ps1'
     'Install-RDNA2NR.cmd'='Install-RDNA2NR.cmd'
@@ -59,7 +68,7 @@ $files=[ordered]@{
     'Licenses/PeripheralWarp_LICENSE.txt'='external/peripheral_warp/LICENSE'
 }
 foreach($entry in $files.GetEnumerator()){
-    $source=Join-Path $root $entry.Value
+    $source=if([IO.Path]::IsPathRooted($entry.Value)){$entry.Value}else{Join-Path $root $entry.Value}
     if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw "Missing release input: $source"}
 }
 $converterFiles=@('write_runtime_package.py','model_weight_provider.py','weights_ht.py',
@@ -68,8 +77,11 @@ foreach($name in $converterFiles){
     $source=Join-Path $root "tools/model_converter/$name"
     if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw "Missing converter source: $source"}
 }
-$frontendExports=& dumpbin.exe /nologo /exports (Join-Path $root $files['OptiScaler.dll'])
-$hipExports=& dumpbin.exe /nologo /exports (Join-Path $root $files['dlssnr_hip_scheduled_bridge.dll'])
+$frontendBinary=if([IO.Path]::IsPathRooted($FrontendPath)){$FrontendPath}else{Join-Path $root $FrontendPath}
+$hipBinary=if([IO.Path]::IsPathRooted($HipBackendPath)){$HipBackendPath}else{Join-Path $root $HipBackendPath}
+$frontendExports=& dumpbin.exe /nologo /exports $frontendBinary
+if($LASTEXITCODE -ne 0){throw 'Frontend export inspection failed.'}
+$hipExports=& dumpbin.exe /nologo /exports $hipBinary
 $frontendText=$frontendExports -join "`n"
 $hipText=$hipExports -join "`n"
 if($LASTEXITCODE -ne 0 -or $frontendText -match 'DlssNrNativeTest|TestArm' -or
@@ -87,7 +99,8 @@ New-Item -ItemType Directory -Path $stage -Force | Out-Null
 foreach($entry in $files.GetEnumerator()){
     $destination=Join-Path $stage $entry.Key
     New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root $entry.Value) -Destination $destination
+    $source=if([IO.Path]::IsPathRooted($entry.Value)){$entry.Value}else{Join-Path $root $entry.Value}
+    Copy-Item -LiteralPath $source -Destination $destination
 }
 [IO.File]::WriteAllText((Join-Path $stage 'VERSION.txt'),"$Version`n",[Text.UTF8Encoding]::new($false))
 $converterStage=Join-Path $stage 'tools/model_converter'

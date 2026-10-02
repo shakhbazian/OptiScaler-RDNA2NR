@@ -1,6 +1,6 @@
 # Troubleshooting
 
-[Documentation](README.md) · [Installation](INSTALLATION.md)
+[Documentation](README.md) В· [Installation](INSTALLATION.md)
 
 ## Menu or upscaler missing
 
@@ -42,7 +42,7 @@ The current HIP executor does not depend on rocBLAS. A rocBLAS error points to a
 
 The installer records file hashes and ownership. If an installed binary has changed since installation, update/uninstall refuses to overwrite it. Close the game, retain the manifest and backup folder, and identify the changed file before deciding which mod owns it. Do not delete the backups as a first troubleshooting step.
 
-An edited INI is intentionally preserved. Unsupported modes left in an old configuration can prevent HIP admission: restore one pass, 100% working size, ordinary pre/post placement and no separate-edit, finished-picture or frame-hold mode.
+An edited INI is intentionally preserved. Unsupported modes left in an old configuration can prevent HIP admission: restore one pass, ordinary pre/post placement and no separate-edit, finished-picture or frame-hold mode.
 
 For script/path errors, use a newly extracted complete release. Supply actual paths when using the command line; do not run the launcher from inside a ZIP archive. Copy the full error text into a report.
 

@@ -94,7 +94,8 @@ static bool CheckForFGStatus()
             State::Instance().activeFgOutput = Config::Instance()->FGOutput.value_or_default();
         }
     }
-    else if (State::Instance().activeFgOutput == FGOutput::XeFG && !XeFGProxy::InitXeFG())
+    else if (State::Instance().activeFgOutput == FGOutput::XeFG &&
+             (!XeFGProxy::InitXeFG() || !XeLLProxy::InitXeLL()))
     {
         ImGui::InsertNotification(
             { ImGuiToastType::Error, 20000, "Can't init XeFG\nAre you missing the required DLLs?" });

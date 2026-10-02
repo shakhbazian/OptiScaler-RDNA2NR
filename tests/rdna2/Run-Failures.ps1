@@ -1,8 +1,12 @@
-param([Parameter(Mandatory=$true)][string]$ModelPath)
+param([Parameter(Mandatory=$true)][string]$ModelPath,
+      [string]$FrontendPath='',
+      [string]$CompanionPath='')
 $ErrorActionPreference='Stop'
 $root=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $out=Join-Path $root 'build/tests/rdna2'
 $model=(Resolve-Path -LiteralPath $ModelPath).Path
+$frontend=if($FrontendPath){(Resolve-Path -LiteralPath $FrontendPath).Path}else{Join-Path $root 'x64/Release/OptiScaler.dll'}
+$companion=if($CompanionPath){(Resolve-Path -LiteralPath $CompanionPath).Path}else{Join-Path $root 'build/hip-gfx1030/dlssnr_hip_scheduled_bridge.dll'}
 $hostExe=Join-Path $out 'optiscaler_dx12_evaluate_host.exe'
 $raw=Join-Path $out 'synthetic_160x90.rgba.f16'
 if(-not(Test-Path -LiteralPath $raw)){throw 'Run-Smoke.ps1 once to create the deterministic input'}
@@ -10,9 +14,9 @@ if(-not(Test-Path -LiteralPath $raw)){throw 'Run-Smoke.ps1 once to create the de
 foreach($case in @('missing-model','corrupt-model','missing-companion')){
     $stage=Join-Path $out "failure-$case"
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root 'x64/Release/OptiScaler.dll') -Destination $stage -Force
+    Copy-Item -LiteralPath $frontend -Destination $stage -Force
     if($case -ne 'missing-companion'){
-        Copy-Item -LiteralPath (Join-Path $root 'build/hip-gfx1030/dlssnr_hip_scheduled_bridge.dll') -Destination $stage -Force
+        Copy-Item -LiteralPath $companion -Destination $stage -Force
     }
     $package=Join-Path $stage 'model.nrwgt'
     if($case -eq 'corrupt-model'){

@@ -1170,4 +1170,1066 @@ __global__ void dot4_grouped_w8a8_to_spatial(
     }
 }
 
+// Fixed-scale restoration specializations, copied from the qualified kernels.
+template<unsigned GroupSize,int RowsPerThread,int Epilogue,unsigned TileRows=16,unsigned TileColumns=32,unsigned TileK=32,
+         int PackedWeights=0,int DotUnroll=TileK/4,bool DirectWeights=false>
+__global__ void research_folded_dot4_grouped_w8a8(
+    const std::int8_t* a,const std::int8_t* w,
+    const float* scaleA,const float* scaleW,
+    const __half* skip,const __half* cosine,__half* out,
+    unsigned m,unsigned k,unsigned n,bool publish=false) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==32||GroupSize==64||GroupSize==128,"supported W8A8 group size");
+    static_assert(GroupSize%TileK==0&&TileK%4==0,"tile must divide scale group");
+    static_assert(TileRows%RowsPerThread==0&&TileColumns%32==0,"invalid output tile");
+    static_assert(!DirectWeights||PackedWeights,"direct loads require packed weights");
+    constexpr unsigned RowThreads=TileRows/RowsPerThread,DotGroups=TileK/4;
+    constexpr unsigned Threads=TileColumns*RowThreads;
+    __shared__ std::int32_t tileA[TileRows][DotGroups];
+    // Transposed with padding: lanes read adjacent banks instead of stride-8.
+    __shared__ std::int32_t tileW[DotGroups][TileColumns+1];
+    const unsigned local=threadIdx.y*TileColumns+threadIdx.x;
+    const unsigned column=blockIdx.x*TileColumns+threadIdx.x;
+    const unsigned scaleGroups=k/GroupSize;
+    float totals[RowsPerThread]={};
+    for(unsigned group=0;group<scaleGroups;++group){
+        std::int32_t partial[RowsPerThread]={};
+        for(unsigned tile=0;tile<GroupSize;tile+=TileK){
+            const unsigned base=group*GroupSize+tile;
+            for(unsigned index=local;index<TileRows*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*TileRows+r;
+                tileA[r][g]=(row<m)?
+                    *reinterpret_cast<const std::int32_t*>(a+size_t(row)*k+base+g*4):0;
+            }
+            if constexpr(!DirectWeights){
+                for(unsigned index=local;index<TileColumns*DotGroups;index+=Threads){
+                    const unsigned c=PackedWeights?index%TileColumns:index/DotGroups;
+                    const unsigned g=PackedWeights?index/TileColumns:index%DotGroups;
+                    const unsigned globalColumn=blockIdx.x*TileColumns+c;
+                    const size_t offset=PackedWeights==2?(size_t(globalColumn/32)*(k/4)*32+size_t(base/4+g)*32+globalColumn%32)*4:
+                        PackedWeights?(size_t(base/4+g)*n+globalColumn)*4:size_t(globalColumn)*k+base+g*4;
+                    tileW[g][c]=(globalColumn<n)?*reinterpret_cast<const std::int32_t*>(w+offset):0;
+                }
+            }
+            __syncthreads();
+            #pragma unroll DotUnroll
+            for(unsigned g=0;g<DotGroups;++g){
+                char4 bv;
+                if constexpr(DirectWeights){
+                    const size_t offset=PackedWeights==2?size_t(column/32)*(k/4)*32+size_t(base/4+g)*32+column%32:size_t(base/4+g)*n+column;
+                    const std::int32_t bits=column<n?reinterpret_cast<const std::int32_t*>(w)[offset]:0;
+                    bv=*reinterpret_cast<const char4*>(&bits);
+                }else bv=*reinterpret_cast<const char4*>(&tileW[g][threadIdx.x]);
+                #pragma unroll
+                for(unsigned r=0;r<RowsPerThread;++r){
+                    const unsigned tileRow=threadIdx.y+r*RowThreads;
+                    const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                    partial[r]=amd_mixed_dot(av,bv,partial[r],false);
+                }
+            }
+            __syncthreads();
+        }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*TileRows+threadIdx.y+r*RowThreads;
+            if(row<m&&column<n){
+                const float combined=scaleW[size_t(group)*n+column];
+                totals[r]+=float(partial[r])*combined;
+            }
+        }
+    }
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned row=blockIdx.y*TileRows+threadIdx.y+r*RowThreads;
+        if(row<m&&column<n){
+            __half value=__float2half(totals[r]);
+            if constexpr(Epilogue==1)value=pubh(ffn_gate(value));
+            if constexpr(Epilogue==2)value=pubh(value);
+            if constexpr(Epilogue==3){
+                value=__hadd(value,__hmul(skip[size_t(row)*n+column],cosine[column]));
+                if(publish)value=pubh(value);
+            }
+            if constexpr(Epilogue==4)value=ffn_gate(value);
+            out[size_t(row)*n+column]=value;
+        }
+    }
+}
+
+template<unsigned GroupSize,int RowsPerThread,unsigned TileK=32,int PackedWeights=0,int DotUnroll=TileK/4>
+__global__ void research_folded_dot4_grouped_w8a8_qkv_normalize(
+    const std::int8_t* a,const std::int8_t* w,
+    const float* scaleA,const float* scaleW,const __half* scale,__half* out,
+    unsigned m,unsigned k,unsigned heads,unsigned tokensPerWindow) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==32||GroupSize==64||GroupSize==128,"supported W8A8 group size");
+    static_assert(GroupSize%TileK==0&&TileK%4==0,"tile must divide scale group");
+    constexpr unsigned TileRows=16,TileColumns=32;
+    constexpr unsigned RowThreads=TileRows/RowsPerThread,DotGroups=TileK/4;
+    constexpr unsigned Threads=TileColumns*RowThreads;
+    __shared__ std::int32_t tileA[TileRows][DotGroups];
+    __shared__ std::int32_t tileW[DotGroups][TileColumns+1];
+    __shared__ __half values[TileRows][TileColumns];
+    __shared__ __half inverse[TileRows];
+    const unsigned local=threadIdx.y*TileColumns+threadIdx.x;
+    const unsigned chunk=blockIdx.x,column=chunk*TileColumns+threadIdx.x;
+    const unsigned n=3*heads*TileColumns,scaleGroups=k/GroupSize;
+    float totals[RowsPerThread]={};
+    for(unsigned group=0;group<scaleGroups;++group){
+        std::int32_t partial[RowsPerThread]={};
+        for(unsigned tile=0;tile<GroupSize;tile+=TileK){
+            const unsigned base=group*GroupSize+tile;
+            for(unsigned index=local;index<TileRows*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*TileRows+r;
+                tileA[r][g]=(row<m)?
+                    *reinterpret_cast<const std::int32_t*>(a+size_t(row)*k+base+g*4):0;
+            }
+            for(unsigned index=local;index<TileColumns*DotGroups;index+=Threads){
+                const unsigned c=PackedWeights?index%TileColumns:index/DotGroups;
+                const unsigned g=PackedWeights?index/TileColumns:index%DotGroups;
+                const unsigned globalColumn=chunk*TileColumns+c;
+                const size_t offset=PackedWeights==2?
+                    (size_t(globalColumn/32)*(k/4)*32+size_t(base/4+g)*32+globalColumn%32)*4:
+                    size_t(globalColumn)*k+base+g*4;
+                tileW[g][c]=*reinterpret_cast<const std::int32_t*>(
+                    w+offset);
+            }
+            __syncthreads();
+            #pragma unroll DotUnroll
+            for(unsigned g=0;g<DotGroups;++g){
+                const char4 bv=*reinterpret_cast<const char4*>(&tileW[g][threadIdx.x]);
+                #pragma unroll
+                for(unsigned r=0;r<RowsPerThread;++r){
+                    const unsigned tileRow=threadIdx.y+r*RowThreads;
+                    const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                    partial[r]=amd_mixed_dot(av,bv,partial[r],false);
+                }
+            }
+            __syncthreads();
+        }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*TileRows+threadIdx.y+r*RowThreads;
+            if(row<m){
+                const float combined=scaleW[size_t(group)*n+column];
+                totals[r]+=float(partial[r])*combined;
+            }
+        }
+    }
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        values[tileRow][threadIdx.x]=row<m?__float2half(totals[r]):__float2half(0);
+    }
+    __syncthreads();
+    const unsigned kind=chunk/heads,head=chunk%heads;
+    if(threadIdx.x==0){
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+            __half inv=__float2half(1);
+            if(row<m&&kind<2){
+                __half part[4][2],pair[4][2];
+                #pragma unroll
+                for(int lane=0;lane<4;++lane)for(int p=0;p<2;++p){
+                    const int q=lane*2+p;
+                    const __half x0=values[tileRow][q],x1=values[tileRow][q+8];
+                    const __half x2=values[tileRow][q+16],x3=values[tileRow][q+24];
+                    const __half first=__hfma(x1,x1,__hmul(x0,x0));
+                    const __half second=__hfma(x3,x3,__hmul(x2,x2));
+                    part[lane][p]=__hadd(first,second);
+                }
+                #pragma unroll
+                for(int lane=0;lane<4;++lane)for(int p=0;p<2;++p)
+                    pair[lane][p]=__hadd(part[lane][p],part[lane^2][p]);
+                __half norm=__hadd(__hadd(pair[0][0],pair[1][0]),
+                                   __hadd(pair[0][1],pair[1][1]));
+                norm=__float2half(fmaxf(__half2float(norm),0.00006198883056640625f));
+                inv=__float2half(rsqrtf(__half2float(norm)));
+            }
+            inverse[tileRow]=inv;
+        }
+    }
+    __syncthreads();
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        if(row<m){
+            __half value=values[tileRow][threadIdx.x];
+            if(kind<2)value=__hmul(value,inverse[tileRow]);
+            if(kind==0)value=__hmul(value,scale[head]);
+            const unsigned window=row/tokensPerWindow,token=row%tokensPerWindow;
+            const size_t target=(((size_t(window)*3+kind)*heads+head)*
+                                 tokensPerWindow+token)*32+threadIdx.x;
+            out[target]=pubh(value);
+        }
+    }
+}
+
+template<unsigned GroupSize,int RowsPerThread>
+__global__ void research_folded_dot4_grouped_w8a8_to_spatial(
+    const std::int8_t* a,const std::int8_t* weights,
+    const float* scaleA,const float* scaleW,
+    const __half* skip,const __half* cosine,__half* out,
+    unsigned m,unsigned k,unsigned n,bool publish,
+    unsigned h,unsigned w,unsigned top,unsigned left,unsigned paddedWidth) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==32||GroupSize==64,"supported W8A8 group size");
+    constexpr unsigned RowThreads=16/RowsPerThread,TileK=32,DotGroups=TileK/4;
+    constexpr unsigned Threads=32*RowThreads;
+    __shared__ std::int32_t tileA[16][DotGroups];
+    __shared__ std::int32_t tileW[DotGroups][33];
+    const unsigned local=threadIdx.y*32+threadIdx.x;
+    const unsigned column=blockIdx.x*32+threadIdx.x;
+    const unsigned scaleGroups=k/GroupSize;
+    float totals[RowsPerThread]={};
+    for(unsigned group=0;group<scaleGroups;++group){
+        std::int32_t partial[RowsPerThread]={};
+        for(unsigned tile=0;tile<GroupSize;tile+=TileK){
+            const unsigned base=group*GroupSize+tile;
+            for(unsigned index=local;index<16*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*16+r;
+                tileA[r][g]=(row<m)?
+                    *reinterpret_cast<const std::int32_t*>(a+size_t(row)*k+base+g*4):0;
+            }
+            for(unsigned index=local;index<32*DotGroups;index+=Threads){
+                const unsigned c=index/DotGroups,g=index%DotGroups,globalColumn=blockIdx.x*32+c;
+                tileW[g][c]=(globalColumn<n)?
+                    *reinterpret_cast<const std::int32_t*>(weights+size_t(globalColumn)*k+base+g*4):0;
+            }
+            __syncthreads();
+            #pragma unroll
+            for(unsigned g=0;g<DotGroups;++g){
+                const char4 bv=*reinterpret_cast<const char4*>(&tileW[g][threadIdx.x]);
+                #pragma unroll
+                for(unsigned r=0;r<RowsPerThread;++r){
+                    const unsigned tileRow=threadIdx.y+r*RowThreads;
+                    const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                    partial[r]=amd_mixed_dot(av,bv,partial[r],false);
+                }
+            }
+            __syncthreads();
+        }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*16+threadIdx.y+r*RowThreads;
+            if(row<m&&column<n){
+                const float combined=scaleW[size_t(group)*n+column];
+                totals[r]+=float(partial[r])*combined;
+            }
+        }
+    }
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        unsigned element=blockIdx.y*16+threadIdx.y+r*RowThreads;
+        if(element<m&&column<n){
+            const unsigned ix=element%8;element/=8;const unsigned iy=element%8;
+            element/=8;const unsigned wx=element%(paddedWidth/8),wy=element/(paddedWidth/8);
+            const int y=int(wy*8+iy)-int(top),x=int(wx*8+ix)-int(left);
+            if(y>=0&&y<int(h)&&x>=0&&x<int(w)){
+                const size_t target=(size_t(y)*w+x)*n+column;
+                __half value=__hadd(__float2half(totals[r]),__hmul(skip[target],cosine[column]));
+                out[target]=publish?pubh(value):value;
+            }
+        }
+    }
+}
+
+template<unsigned GroupSize,int RowsPerThread>
+__global__ void research_folded_dot4_broadcast_batched_gate_w8a8(
+    const std::int8_t* a,const std::int8_t* w,
+    const float* scaleA,const float* scaleW,__half* out,
+    unsigned rows,unsigned batches,unsigned k,unsigned n) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==32||GroupSize==64,"supported W8A8 group size");
+    constexpr unsigned RowThreads=16/RowsPerThread,TileK=32,DotGroups=TileK/4;
+    constexpr unsigned Threads=32*RowThreads;
+    __shared__ std::int32_t tileA[16][DotGroups];
+    __shared__ std::int32_t tileW[DotGroups][33];
+    const unsigned local=threadIdx.y*32+threadIdx.x,column=blockIdx.x*32+threadIdx.x,
+        batch=blockIdx.z,scaleGroups=k/GroupSize;
+    float totals[RowsPerThread]={};
+    for(unsigned group=0;group<scaleGroups;++group){
+        std::int32_t partial[RowsPerThread]={};
+        for(unsigned tile=0;tile<GroupSize;tile+=TileK){
+            const unsigned base=group*GroupSize+tile;
+            for(unsigned index=local;index<16*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*16+r;
+                tileA[r][g]=(row<rows)?*reinterpret_cast<const std::int32_t*>(
+                    a+size_t(row)*k+base+g*4):0;
+            }
+            for(unsigned index=local;index<32*DotGroups;index+=Threads){
+                const unsigned c=index/DotGroups,g=index%DotGroups,globalColumn=blockIdx.x*32+c;
+                tileW[g][c]=(globalColumn<n)?*reinterpret_cast<const std::int32_t*>(
+                    w+size_t(batch)*n*k+size_t(globalColumn)*k+base+g*4):0;
+            }
+            __syncthreads();
+            #pragma unroll
+            for(unsigned g=0;g<DotGroups;++g){
+                const char4 bv=*reinterpret_cast<const char4*>(&tileW[g][threadIdx.x]);
+                #pragma unroll
+                for(unsigned r=0;r<RowsPerThread;++r){
+                    const unsigned tileRow=threadIdx.y+r*RowThreads;
+                    const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                    partial[r]=amd_mixed_dot(av,bv,partial[r],false);
+                }
+            }
+            __syncthreads();
+        }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*16+threadIdx.y+r*RowThreads;
+            if(row<rows&&column<n){
+                const float combined=scaleW[(size_t(batch)*scaleGroups+group)*n+column];
+                totals[r]+=float(partial[r])*combined;
+            }
+        }
+    }
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned row=blockIdx.y*16+threadIdx.y+r*RowThreads;
+        if(row<rows&&column<n)
+            out[(size_t(row)*batches+batch)*n+column]=pubh(ffn_gate(__float2half(totals[r])));
+    }
+}
+
+template<unsigned GroupSize,int RowsPerThread,bool PackedProject=false>
+__global__ void research_folded_dot4_branched_staged_w8a8(
+    const std::int8_t* a,const std::int8_t* expandWeight,
+    const float* scaleA,const float* expandScale,
+    const __half* projectWeight,__half* combined,
+    unsigned rows,unsigned channels) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==64,"supported resident branch group size");
+    constexpr unsigned TileRows=16,RowThreads=TileRows/RowsPerThread,
+        TileK=64,DotGroups=TileK/4,Threads=32*RowThreads;
+    __shared__ std::int32_t tileA[TileRows][DotGroups];
+    __shared__ std::int32_t weightScratch[4*DotGroups*33];
+    auto& tileW=*reinterpret_cast<std::int32_t (*)[4][DotGroups][33]>(weightScratch);
+    __shared__ __half hidden[TileRows][4][32];
+    using ProjectValue=typename std::conditional<PackedProject,__half2,__half>::type;
+    constexpr unsigned ProjectRows=PackedProject?16:32;
+    static_assert(PackedProject,"shared reuse expects packed projection");
+    // The final matrix barrier ends all tileW reads before projection overwrites it.
+    static_assert(4*ProjectRows*33*sizeof(ProjectValue)<=sizeof(weightScratch),"projection scratch size");
+    auto& projection=*reinterpret_cast<ProjectValue (*)[4][ProjectRows][33]>(weightScratch);
+    const unsigned local=threadIdx.y*32+threadIdx.x,outGroup=blockIdx.x,
+        column=threadIdx.x,scaleGroups=channels/GroupSize,batchBase=outGroup*4;
+    float totals[RowsPerThread][4]={};
+    for(unsigned scaleGroup=0;scaleGroup<scaleGroups;++scaleGroup){
+        std::int32_t partial[RowsPerThread][4]={};
+
+        for(unsigned tile=0;tile<GroupSize;tile+=TileK){
+            const unsigned base=scaleGroup*GroupSize+tile;
+            for(unsigned index=local;index<TileRows*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*TileRows+r;
+                tileA[r][g]=(row<rows)?*reinterpret_cast<const std::int32_t*>(
+                    a+size_t(row)*channels+base+g*4):0;
+            }
+            for(unsigned index=local;index<4*32*DotGroups;index+=Threads){
+                const unsigned branch=index/(32*DotGroups),c=(index/DotGroups)%32,g=index%DotGroups;
+                tileW[branch][g][c]=*reinterpret_cast<const std::int32_t*>(
+                    expandWeight+size_t(batchBase+branch)*32*channels+size_t(c)*channels+base+g*4);
+            }
+            __syncthreads();
+            #pragma unroll 4
+            for(unsigned g=0;g<DotGroups;++g){
+                char4 bv[4];
+                #pragma unroll
+                for(unsigned branch=0;branch<4;++branch)
+                    bv[branch]=*reinterpret_cast<const char4*>(&tileW[branch][g][column]);
+                #pragma unroll
+                for(unsigned r=0;r<RowsPerThread;++r){
+                    const unsigned tileRow=threadIdx.y+r*RowThreads;
+                    const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                    #pragma unroll
+                    for(unsigned branch=0;branch<4;++branch)
+                        partial[r][branch]=amd_mixed_dot(av,bv[branch],partial[r][branch],false);
+                }
+            }
+            __syncthreads();
+        }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*TileRows+threadIdx.y+r*RowThreads;
+            if(row<rows){
+
+                #pragma unroll
+                for(unsigned branch=0;branch<4;++branch){
+                    const unsigned batch=batchBase+branch;
+                    const float combinedScale=expandScale[(size_t(batch)*scaleGroups+scaleGroup)*32+column];
+                    totals[r][branch]+=float(partial[r][branch])*combinedScale;
+                }
+            }
+        }
+    }
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        #pragma unroll
+        for(unsigned branch=0;branch<4;++branch)
+            hidden[tileRow][branch][column]=row<rows?
+                pubh(ffn_gate(__float2half(totals[r][branch]))):__float2half(0);
+    }
+    for(unsigned index=local;index<4*ProjectRows*32;index+=Threads){
+        const unsigned branch=index/(ProjectRows*32),k=(index/32)%ProjectRows,c=index%32;
+        if constexpr(PackedProject)
+            projection[branch][k][c]=reinterpret_cast<const __half2*>(projectWeight)[
+                (size_t(batchBase+branch)*16+k)*32+c];
+        else projection[branch][k][c]=projectWeight[(size_t(batchBase+branch)*32+k)*32+c];
+    }
+    __syncthreads();
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        if(row<rows){
+            __half merged=__float2half(0);
+            #pragma unroll
+            for(unsigned branch=0;branch<4;++branch){
+                float sum=0;
+                #pragma unroll
+                for(unsigned k=0;k<32;k+=2){
+                    __half2 weightPair;
+                    if constexpr(PackedProject)weightPair=projection[branch][k/2][column];
+                    else weightPair=__halves2half2(projection[branch][k][column],projection[branch][k+1][column]);
+                    sum=amd_mixed_dot(__halves2half2(hidden[tileRow][branch][k],hidden[tileRow][branch][k+1]),
+                        weightPair,sum,false);
+                }
+                merged=__hadd(merged,__float2half(sum));
+            }
+            combined[size_t(row)*channels+outGroup*32+column]=pubh(merged);
+        }
+    }
+}
+
+template<unsigned GroupSize,int RowsPerThread,bool PackedProject=false>
+__global__ void research_folded_dot4_branched_resident_w8a8(
+    const std::int8_t* a,const std::int8_t* expandWeight,
+    const float* scaleA,const float* expandScale,
+    const __half* projectWeight,__half* combined,
+    unsigned rows,unsigned channels) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==32||GroupSize==64,"supported resident branch group size");
+    constexpr unsigned TileRows=16,RowThreads=TileRows/RowsPerThread,
+        TileK=32,DotGroups=TileK/4,Threads=32*RowThreads;
+    __shared__ std::int32_t tileA[TileRows][DotGroups];
+    __shared__ std::int32_t tileW[DotGroups][33];
+    __shared__ __half hidden[TileRows][4][32];
+    using ProjectValue=typename std::conditional<PackedProject,__half2,__half>::type;
+    constexpr unsigned ProjectRows=PackedProject?16:32;
+    __shared__ ProjectValue projection[4][ProjectRows][33];
+    const unsigned local=threadIdx.y*32+threadIdx.x,outGroup=blockIdx.x,
+        column=threadIdx.x,scaleGroups=channels/GroupSize,batchBase=outGroup*4;
+    float totals[RowsPerThread][4]={};
+    for(unsigned scaleGroup=0;scaleGroup<scaleGroups;++scaleGroup){
+        std::int32_t partial[RowsPerThread][4]={};
+        for(unsigned tile=0;tile<GroupSize;tile+=TileK){
+            const unsigned base=scaleGroup*GroupSize+tile;
+            for(unsigned index=local;index<TileRows*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*TileRows+r;
+                tileA[r][g]=(row<rows)?*reinterpret_cast<const std::int32_t*>(
+                    a+size_t(row)*channels+base+g*4):0;
+            }
+            for(unsigned branch=0;branch<4;++branch){
+                const unsigned batch=batchBase+branch;
+                for(unsigned index=local;index<32*DotGroups;index+=Threads){
+                    const unsigned c=index/DotGroups,g=index%DotGroups;
+                    tileW[g][c]=*reinterpret_cast<const std::int32_t*>(
+                        expandWeight+size_t(batch)*32*channels+size_t(c)*channels+base+g*4);
+                }
+                __syncthreads();
+                #pragma unroll
+                for(unsigned g=0;g<DotGroups;++g){
+                    const char4 bv=*reinterpret_cast<const char4*>(&tileW[g][column]);
+                    #pragma unroll
+                    for(unsigned r=0;r<RowsPerThread;++r){
+                        const unsigned tileRow=threadIdx.y+r*RowThreads;
+                        const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                        partial[r][branch]=amd_mixed_dot(av,bv,partial[r][branch],false);
+                    }
+                }
+                __syncthreads();
+            }
+        }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*TileRows+threadIdx.y+r*RowThreads;
+            if(row<rows){
+
+                #pragma unroll
+                for(unsigned branch=0;branch<4;++branch){
+                    const unsigned batch=batchBase+branch;
+                    const float combinedScale=expandScale[(size_t(batch)*scaleGroups+scaleGroup)*32+column];
+                    totals[r][branch]+=float(partial[r][branch])*combinedScale;
+                }
+            }
+        }
+    }
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        #pragma unroll
+        for(unsigned branch=0;branch<4;++branch)
+            hidden[tileRow][branch][column]=row<rows?
+                pubh(ffn_gate(__float2half(totals[r][branch]))):__float2half(0);
+    }
+    for(unsigned index=local;index<4*ProjectRows*32;index+=Threads){
+        const unsigned branch=index/(ProjectRows*32),k=(index/32)%ProjectRows,c=index%32;
+        if constexpr(PackedProject)
+            projection[branch][k][c]=reinterpret_cast<const __half2*>(projectWeight)[
+                (size_t(batchBase+branch)*16+k)*32+c];
+        else projection[branch][k][c]=projectWeight[(size_t(batchBase+branch)*32+k)*32+c];
+    }
+    __syncthreads();
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        if(row<rows){
+            __half merged=__float2half(0);
+            #pragma unroll
+            for(unsigned branch=0;branch<4;++branch){
+                float sum=0;
+                #pragma unroll
+                for(unsigned k=0;k<32;k+=2){
+                    __half2 weightPair;
+                    if constexpr(PackedProject)weightPair=projection[branch][k/2][column];
+                    else weightPair=__halves2half2(projection[branch][k][column],projection[branch][k+1][column]);
+                    sum=amd_mixed_dot(__halves2half2(hidden[tileRow][branch][k],hidden[tileRow][branch][k+1]),
+                        weightPair,sum,false);
+                }
+                merged=__hadd(merged,__float2half(sum));
+            }
+            combined[size_t(row)*channels+outGroup*32+column]=pubh(merged);
+        }
+    }
+}
+
+// One restoration after the complete INT32 dot.
+template<unsigned GroupSize,int RowsPerThread,int Epilogue,unsigned TileRows=16,unsigned TileColumns=32,unsigned TileK=32,
+         int PackedWeights=0,int DotUnroll=TileK/4,bool DirectWeights=false>
+__global__ void research_long_dot4_grouped_w8a8(
+    const std::int8_t* a,const std::int8_t* w,
+    const float* scaleA,const float* scaleW,
+    const __half* skip,const __half* cosine,__half* out,
+    unsigned m,unsigned k,unsigned n,bool publish=false) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==32||GroupSize==64||GroupSize==128,"supported W8A8 group size");
+    static_assert(GroupSize%TileK==0&&TileK%4==0,"tile must divide scale group");
+    static_assert(TileRows%RowsPerThread==0&&TileColumns%32==0,"invalid output tile");
+    static_assert(!DirectWeights||PackedWeights,"direct loads require packed weights");
+    constexpr unsigned RowThreads=TileRows/RowsPerThread,DotGroups=TileK/4;
+    constexpr unsigned Threads=TileColumns*RowThreads;
+    __shared__ std::int32_t tileA[TileRows][DotGroups];
+    // Transposed with padding: lanes read adjacent banks instead of stride-8.
+    __shared__ std::int32_t tileW[DotGroups][TileColumns+1];
+    const unsigned local=threadIdx.y*TileColumns+threadIdx.x;
+    const unsigned column=blockIdx.x*TileColumns+threadIdx.x;
+    float totals[RowsPerThread]={};
+    std::int32_t partial[RowsPerThread]={};
+    for(unsigned base=0;base<k;base+=TileK){
+
+            for(unsigned index=local;index<TileRows*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*TileRows+r;
+                tileA[r][g]=(row<m)?
+                    *reinterpret_cast<const std::int32_t*>(a+size_t(row)*k+base+g*4):0;
+            }
+            if constexpr(!DirectWeights){
+                for(unsigned index=local;index<TileColumns*DotGroups;index+=Threads){
+                    const unsigned c=PackedWeights?index%TileColumns:index/DotGroups;
+                    const unsigned g=PackedWeights?index/TileColumns:index%DotGroups;
+                    const unsigned globalColumn=blockIdx.x*TileColumns+c;
+                    const size_t offset=PackedWeights==2?(size_t(globalColumn/32)*(k/4)*32+size_t(base/4+g)*32+globalColumn%32)*4:
+                        PackedWeights?(size_t(base/4+g)*n+globalColumn)*4:size_t(globalColumn)*k+base+g*4;
+                    tileW[g][c]=(globalColumn<n)?*reinterpret_cast<const std::int32_t*>(w+offset):0;
+                }
+            }
+            __syncthreads();
+            #pragma unroll DotUnroll
+            for(unsigned g=0;g<DotGroups;++g){
+                char4 bv;
+                if constexpr(DirectWeights){
+                    const size_t offset=PackedWeights==2?size_t(column/32)*(k/4)*32+size_t(base/4+g)*32+column%32:size_t(base/4+g)*n+column;
+                    const std::int32_t bits=column<n?reinterpret_cast<const std::int32_t*>(w)[offset]:0;
+                    bv=*reinterpret_cast<const char4*>(&bits);
+                }else bv=*reinterpret_cast<const char4*>(&tileW[g][threadIdx.x]);
+                #pragma unroll
+                for(unsigned r=0;r<RowsPerThread;++r){
+                    const unsigned tileRow=threadIdx.y+r*RowThreads;
+                    const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                    partial[r]=amd_mixed_dot(av,bv,partial[r],false);
+                }
+            }
+            __syncthreads();
+
+    }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*TileRows+threadIdx.y+r*RowThreads;
+            if(row<m&&column<n){
+                const float combined=scaleW[column];
+                totals[r]=float(partial[r])*combined;
+            }
+        }
+
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned row=blockIdx.y*TileRows+threadIdx.y+r*RowThreads;
+        if(row<m&&column<n){
+            __half value=__float2half(totals[r]);
+            if constexpr(Epilogue==1)value=pubh(ffn_gate(value));
+            if constexpr(Epilogue==2)value=pubh(value);
+            if constexpr(Epilogue==3){
+                value=__hadd(value,__hmul(skip[size_t(row)*n+column],cosine[column]));
+                if(publish)value=pubh(value);
+            }
+            if constexpr(Epilogue==4)value=ffn_gate(value);
+            out[size_t(row)*n+column]=value;
+        }
+    }
+}
+
+template<unsigned GroupSize,int RowsPerThread,unsigned TileK=32,int PackedWeights=0,int DotUnroll=TileK/4>
+__global__ void research_long_dot4_grouped_w8a8_qkv_normalize(
+    const std::int8_t* a,const std::int8_t* w,
+    const float* scaleA,const float* scaleW,const __half* scale,__half* out,
+    unsigned m,unsigned k,unsigned heads,unsigned tokensPerWindow) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==32||GroupSize==64||GroupSize==128,"supported W8A8 group size");
+    static_assert(GroupSize%TileK==0&&TileK%4==0,"tile must divide scale group");
+    constexpr unsigned TileRows=64,TileColumns=32;
+    constexpr unsigned RowThreads=TileRows/RowsPerThread,DotGroups=TileK/4;
+    constexpr unsigned Threads=TileColumns*RowThreads;
+    __shared__ std::int32_t tileA[TileRows][DotGroups];
+    __shared__ std::int32_t tileW[DotGroups][TileColumns+1];
+    __shared__ __half values[TileRows][TileColumns];
+    __shared__ __half inverse[TileRows];
+    const unsigned local=threadIdx.y*TileColumns+threadIdx.x;
+    const unsigned chunk=blockIdx.x,column=chunk*TileColumns+threadIdx.x;
+    float totals[RowsPerThread]={};
+    std::int32_t partial[RowsPerThread]={};
+    for(unsigned base=0;base<k;base+=TileK){
+
+            for(unsigned index=local;index<TileRows*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*TileRows+r;
+                tileA[r][g]=(row<m)?
+                    *reinterpret_cast<const std::int32_t*>(a+size_t(row)*k+base+g*4):0;
+            }
+            for(unsigned index=local;index<TileColumns*DotGroups;index+=Threads){
+                const unsigned c=PackedWeights?index%TileColumns:index/DotGroups;
+                const unsigned g=PackedWeights?index/TileColumns:index%DotGroups;
+                const unsigned globalColumn=chunk*TileColumns+c;
+                const size_t offset=PackedWeights==2?
+                    (size_t(globalColumn/32)*(k/4)*32+size_t(base/4+g)*32+globalColumn%32)*4:
+                    size_t(globalColumn)*k+base+g*4;
+                tileW[g][c]=*reinterpret_cast<const std::int32_t*>(
+                    w+offset);
+            }
+            __syncthreads();
+            #pragma unroll DotUnroll
+            for(unsigned g=0;g<DotGroups;++g){
+                const char4 bv=*reinterpret_cast<const char4*>(&tileW[g][threadIdx.x]);
+                #pragma unroll
+                for(unsigned r=0;r<RowsPerThread;++r){
+                    const unsigned tileRow=threadIdx.y+r*RowThreads;
+                    const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                    partial[r]=amd_mixed_dot(av,bv,partial[r],false);
+                }
+            }
+            __syncthreads();
+
+    }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*TileRows+threadIdx.y+r*RowThreads;
+            if(row<m){
+                const float combined=scaleW[column];
+                totals[r]=float(partial[r])*combined;
+            }
+        }
+
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        values[tileRow][threadIdx.x]=row<m?__float2half(totals[r]):__float2half(0);
+    }
+    __syncthreads();
+    const unsigned kind=chunk/heads,head=chunk%heads;
+    if(threadIdx.x==0){
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+            __half inv=__float2half(1);
+            if(row<m&&kind<2){
+                __half part[4][2],pair[4][2];
+                #pragma unroll
+                for(int lane=0;lane<4;++lane)for(int p=0;p<2;++p){
+                    const int q=lane*2+p;
+                    const __half x0=values[tileRow][q],x1=values[tileRow][q+8];
+                    const __half x2=values[tileRow][q+16],x3=values[tileRow][q+24];
+                    const __half first=__hfma(x1,x1,__hmul(x0,x0));
+                    const __half second=__hfma(x3,x3,__hmul(x2,x2));
+                    part[lane][p]=__hadd(first,second);
+                }
+                #pragma unroll
+                for(int lane=0;lane<4;++lane)for(int p=0;p<2;++p)
+                    pair[lane][p]=__hadd(part[lane][p],part[lane^2][p]);
+                __half norm=__hadd(__hadd(pair[0][0],pair[1][0]),
+                                   __hadd(pair[0][1],pair[1][1]));
+                norm=__float2half(fmaxf(__half2float(norm),0.00006198883056640625f));
+                inv=__float2half(rsqrtf(__half2float(norm)));
+            }
+            inverse[tileRow]=inv;
+        }
+    }
+    __syncthreads();
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        if(row<m){
+            __half value=values[tileRow][threadIdx.x];
+            if(kind<2)value=__hmul(value,inverse[tileRow]);
+            if(kind==0)value=__hmul(value,scale[head]);
+            const unsigned window=row/tokensPerWindow,token=row%tokensPerWindow;
+            const size_t target=(((size_t(window)*3+kind)*heads+head)*
+                                 tokensPerWindow+token)*32+threadIdx.x;
+            out[target]=pubh(value);
+        }
+    }
+}
+
+template<unsigned GroupSize,int RowsPerThread>
+__global__ void research_long_dot4_grouped_w8a8_to_spatial(
+    const std::int8_t* a,const std::int8_t* weights,
+    const float* scaleA,const float* scaleW,
+    const __half* skip,const __half* cosine,__half* out,
+    unsigned m,unsigned k,unsigned n,bool publish,
+    unsigned h,unsigned w,unsigned top,unsigned left,unsigned paddedWidth) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==32||GroupSize==64,"supported W8A8 group size");
+    constexpr unsigned RowThreads=16/RowsPerThread,TileK=32,DotGroups=TileK/4;
+    constexpr unsigned Threads=32*RowThreads;
+    __shared__ std::int32_t tileA[16][DotGroups];
+    __shared__ std::int32_t tileW[DotGroups][33];
+    const unsigned local=threadIdx.y*32+threadIdx.x;
+    const unsigned column=blockIdx.x*32+threadIdx.x;
+    float totals[RowsPerThread]={};
+    std::int32_t partial[RowsPerThread]={};
+    for(unsigned base=0;base<k;base+=TileK){
+
+            for(unsigned index=local;index<16*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*16+r;
+                tileA[r][g]=(row<m)?
+                    *reinterpret_cast<const std::int32_t*>(a+size_t(row)*k+base+g*4):0;
+            }
+            for(unsigned index=local;index<32*DotGroups;index+=Threads){
+                const unsigned c=index/DotGroups,g=index%DotGroups,globalColumn=blockIdx.x*32+c;
+                tileW[g][c]=(globalColumn<n)?
+                    *reinterpret_cast<const std::int32_t*>(weights+size_t(globalColumn)*k+base+g*4):0;
+            }
+            __syncthreads();
+            #pragma unroll
+            for(unsigned g=0;g<DotGroups;++g){
+                const char4 bv=*reinterpret_cast<const char4*>(&tileW[g][threadIdx.x]);
+                #pragma unroll
+                for(unsigned r=0;r<RowsPerThread;++r){
+                    const unsigned tileRow=threadIdx.y+r*RowThreads;
+                    const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                    partial[r]=amd_mixed_dot(av,bv,partial[r],false);
+                }
+            }
+            __syncthreads();
+
+    }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*16+threadIdx.y+r*RowThreads;
+            if(row<m&&column<n){
+                const float combined=scaleW[column];
+                totals[r]=float(partial[r])*combined;
+            }
+        }
+
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        unsigned element=blockIdx.y*16+threadIdx.y+r*RowThreads;
+        if(element<m&&column<n){
+            const unsigned ix=element%8;element/=8;const unsigned iy=element%8;
+            element/=8;const unsigned wx=element%(paddedWidth/8),wy=element/(paddedWidth/8);
+            const int y=int(wy*8+iy)-int(top),x=int(wx*8+ix)-int(left);
+            if(y>=0&&y<int(h)&&x>=0&&x<int(w)){
+                const size_t target=(size_t(y)*w+x)*n+column;
+                __half value=__hadd(__float2half(totals[r]),__hmul(skip[target],cosine[column]));
+                out[target]=publish?pubh(value):value;
+            }
+        }
+    }
+}
+
+template<unsigned GroupSize,int RowsPerThread>
+__global__ void research_long_dot4_broadcast_batched_gate_w8a8(
+    const std::int8_t* a,const std::int8_t* w,
+    const float* scaleA,const float* scaleW,__half* out,
+    unsigned rows,unsigned batches,unsigned k,unsigned n) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==32||GroupSize==64,"supported W8A8 group size");
+    constexpr unsigned RowThreads=16/RowsPerThread,TileK=32,DotGroups=TileK/4;
+    constexpr unsigned Threads=32*RowThreads;
+    __shared__ std::int32_t tileA[16][DotGroups];
+    __shared__ std::int32_t tileW[DotGroups][33];
+    const unsigned local=threadIdx.y*32+threadIdx.x,column=blockIdx.x*32+threadIdx.x,
+        batch=blockIdx.z,scaleGroups=k/GroupSize;
+    float totals[RowsPerThread]={};
+    std::int32_t partial[RowsPerThread]={};
+    for(unsigned base=0;base<k;base+=TileK){
+
+            for(unsigned index=local;index<16*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*16+r;
+                tileA[r][g]=(row<rows)?*reinterpret_cast<const std::int32_t*>(
+                    a+size_t(row)*k+base+g*4):0;
+            }
+            for(unsigned index=local;index<32*DotGroups;index+=Threads){
+                const unsigned c=index/DotGroups,g=index%DotGroups,globalColumn=blockIdx.x*32+c;
+                tileW[g][c]=(globalColumn<n)?*reinterpret_cast<const std::int32_t*>(
+                    w+size_t(batch)*n*k+size_t(globalColumn)*k+base+g*4):0;
+            }
+            __syncthreads();
+            #pragma unroll
+            for(unsigned g=0;g<DotGroups;++g){
+                const char4 bv=*reinterpret_cast<const char4*>(&tileW[g][threadIdx.x]);
+                #pragma unroll
+                for(unsigned r=0;r<RowsPerThread;++r){
+                    const unsigned tileRow=threadIdx.y+r*RowThreads;
+                    const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                    partial[r]=amd_mixed_dot(av,bv,partial[r],false);
+                }
+            }
+            __syncthreads();
+
+    }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*16+threadIdx.y+r*RowThreads;
+            if(row<rows&&column<n){
+                const float combined=scaleW[(size_t(batch)*scaleGroups)*n+column];
+                totals[r]=float(partial[r])*combined;
+            }
+        }
+
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned row=blockIdx.y*16+threadIdx.y+r*RowThreads;
+        if(row<rows&&column<n)
+            out[(size_t(row)*batches+batch)*n+column]=pubh(ffn_gate(__float2half(totals[r])));
+    }
+}
+
+template<unsigned GroupSize,int RowsPerThread,bool PackedProject=false>
+__global__ void research_long_dot4_branched_staged_w8a8(
+    const std::int8_t* a,const std::int8_t* expandWeight,
+    const float* scaleA,const float* expandScale,
+    const __half* projectWeight,__half* combined,
+    unsigned rows,unsigned channels) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==64,"supported resident branch group size");
+    constexpr unsigned TileRows=32,RowThreads=TileRows/RowsPerThread,
+        TileK=64,DotGroups=TileK/4,Threads=32*RowThreads;
+    __shared__ std::int32_t tileA[TileRows][DotGroups];
+    __shared__ std::int32_t weightScratch[4*DotGroups*33];
+    auto& tileW=*reinterpret_cast<std::int32_t (*)[4][DotGroups][33]>(weightScratch);
+    __shared__ __half hidden[TileRows][4][32];
+    using ProjectValue=typename std::conditional<PackedProject,__half2,__half>::type;
+    constexpr unsigned ProjectRows=PackedProject?16:32;
+    static_assert(PackedProject,"shared reuse expects packed projection");
+    // The final matrix barrier ends all tileW reads before projection overwrites it.
+    static_assert(4*ProjectRows*33*sizeof(ProjectValue)<=sizeof(weightScratch),"projection scratch size");
+    auto& projection=*reinterpret_cast<ProjectValue (*)[4][ProjectRows][33]>(weightScratch);
+    const unsigned local=threadIdx.y*32+threadIdx.x,outGroup=blockIdx.x,
+        column=threadIdx.x,scaleGroups=channels/GroupSize,batchBase=outGroup*4;
+    float totals[RowsPerThread][4]={};
+    std::int32_t partial[RowsPerThread][4]={};
+    for(unsigned base=0;base<channels;base+=TileK){
+
+            for(unsigned index=local;index<TileRows*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*TileRows+r;
+                tileA[r][g]=(row<rows)?*reinterpret_cast<const std::int32_t*>(
+                    a+size_t(row)*channels+base+g*4):0;
+            }
+            for(unsigned index=local;index<4*32*DotGroups;index+=Threads){
+                const unsigned branch=index/(32*DotGroups),c=(index/DotGroups)%32,g=index%DotGroups;
+                tileW[branch][g][c]=*reinterpret_cast<const std::int32_t*>(
+                    expandWeight+size_t(batchBase+branch)*32*channels+size_t(c)*channels+base+g*4);
+            }
+            __syncthreads();
+            #pragma unroll 4
+            for(unsigned g=0;g<DotGroups;++g){
+                char4 bv[4];
+                #pragma unroll
+                for(unsigned branch=0;branch<4;++branch)
+                    bv[branch]=*reinterpret_cast<const char4*>(&tileW[branch][g][column]);
+                #pragma unroll
+                for(unsigned r=0;r<RowsPerThread;++r){
+                    const unsigned tileRow=threadIdx.y+r*RowThreads;
+                    const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                    #pragma unroll
+                    for(unsigned branch=0;branch<4;++branch)
+                        partial[r][branch]=amd_mixed_dot(av,bv[branch],partial[r][branch],false);
+                }
+            }
+            __syncthreads();
+
+    }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*TileRows+threadIdx.y+r*RowThreads;
+            if(row<rows){
+
+                #pragma unroll
+                for(unsigned branch=0;branch<4;++branch){
+                    const unsigned batch=batchBase+branch;
+                    const float combinedScale=expandScale[(size_t(batch)*scaleGroups)*32+column];
+                    totals[r][branch]=float(partial[r][branch])*combinedScale;
+                }
+            }
+        }
+
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        #pragma unroll
+        for(unsigned branch=0;branch<4;++branch)
+            hidden[tileRow][branch][column]=row<rows?
+                pubh(ffn_gate(__float2half(totals[r][branch]))):__float2half(0);
+    }
+    for(unsigned index=local;index<4*ProjectRows*32;index+=Threads){
+        const unsigned branch=index/(ProjectRows*32),k=(index/32)%ProjectRows,c=index%32;
+        if constexpr(PackedProject)
+            projection[branch][k][c]=reinterpret_cast<const __half2*>(projectWeight)[
+                (size_t(batchBase+branch)*16+k)*32+c];
+        else projection[branch][k][c]=projectWeight[(size_t(batchBase+branch)*32+k)*32+c];
+    }
+    __syncthreads();
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        if(row<rows){
+            __half merged=__float2half(0);
+            #pragma unroll
+            for(unsigned branch=0;branch<4;++branch){
+                float sum=0;
+                #pragma unroll
+                for(unsigned k=0;k<32;k+=2){
+                    __half2 weightPair;
+                    if constexpr(PackedProject)weightPair=projection[branch][k/2][column];
+                    else weightPair=__halves2half2(projection[branch][k][column],projection[branch][k+1][column]);
+                    sum=amd_mixed_dot(__halves2half2(hidden[tileRow][branch][k],hidden[tileRow][branch][k+1]),
+                        weightPair,sum,false);
+                }
+                merged=__hadd(merged,__float2half(sum));
+            }
+            combined[size_t(row)*channels+outGroup*32+column]=pubh(merged);
+        }
+    }
+}
+
+template<unsigned GroupSize,int RowsPerThread,bool PackedProject=false>
+__global__ void research_long_dot4_branched_resident_w8a8(
+    const std::int8_t* a,const std::int8_t* expandWeight,
+    const float* scaleA,const float* expandScale,
+    const __half* projectWeight,__half* combined,
+    unsigned rows,unsigned channels) {
+    static_cast<void>(scaleA);
+    static_assert(GroupSize==32||GroupSize==64,"supported resident branch group size");
+    constexpr unsigned TileRows=16,RowThreads=TileRows/RowsPerThread,
+        TileK=32,DotGroups=TileK/4,Threads=32*RowThreads;
+    __shared__ std::int32_t tileA[TileRows][DotGroups];
+    __shared__ std::int32_t tileW[DotGroups][33];
+    __shared__ __half hidden[TileRows][4][32];
+    using ProjectValue=typename std::conditional<PackedProject,__half2,__half>::type;
+    constexpr unsigned ProjectRows=PackedProject?16:32;
+    __shared__ ProjectValue projection[4][ProjectRows][33];
+    const unsigned local=threadIdx.y*32+threadIdx.x,outGroup=blockIdx.x,
+        column=threadIdx.x,scaleGroups=channels/GroupSize,batchBase=outGroup*4;
+    float totals[RowsPerThread][4]={};
+    std::int32_t partial[RowsPerThread][4]={};
+    for(unsigned base=0;base<channels;base+=TileK){
+
+            for(unsigned index=local;index<TileRows*DotGroups;index+=Threads){
+                const unsigned r=index/DotGroups,g=index%DotGroups,row=blockIdx.y*TileRows+r;
+                tileA[r][g]=(row<rows)?*reinterpret_cast<const std::int32_t*>(
+                    a+size_t(row)*channels+base+g*4):0;
+            }
+            for(unsigned branch=0;branch<4;++branch){
+                const unsigned batch=batchBase+branch;
+                for(unsigned index=local;index<32*DotGroups;index+=Threads){
+                    const unsigned c=index/DotGroups,g=index%DotGroups;
+                    tileW[g][c]=*reinterpret_cast<const std::int32_t*>(
+                        expandWeight+size_t(batch)*32*channels+size_t(c)*channels+base+g*4);
+                }
+                __syncthreads();
+                #pragma unroll
+                for(unsigned g=0;g<DotGroups;++g){
+                    const char4 bv=*reinterpret_cast<const char4*>(&tileW[g][column]);
+                    #pragma unroll
+                    for(unsigned r=0;r<RowsPerThread;++r){
+                        const unsigned tileRow=threadIdx.y+r*RowThreads;
+                        const char4 av=*reinterpret_cast<const char4*>(&tileA[tileRow][g]);
+                        partial[r][branch]=amd_mixed_dot(av,bv,partial[r][branch],false);
+                    }
+                }
+                __syncthreads();
+            }
+
+    }
+        #pragma unroll
+        for(unsigned r=0;r<RowsPerThread;++r){
+            const unsigned row=blockIdx.y*TileRows+threadIdx.y+r*RowThreads;
+            if(row<rows){
+
+                #pragma unroll
+                for(unsigned branch=0;branch<4;++branch){
+                    const unsigned batch=batchBase+branch;
+                    const float combinedScale=expandScale[(size_t(batch)*scaleGroups)*32+column];
+                    totals[r][branch]=float(partial[r][branch])*combinedScale;
+                }
+            }
+        }
+
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        #pragma unroll
+        for(unsigned branch=0;branch<4;++branch)
+            hidden[tileRow][branch][column]=row<rows?
+                pubh(ffn_gate(__float2half(totals[r][branch]))):__float2half(0);
+    }
+    for(unsigned index=local;index<4*ProjectRows*32;index+=Threads){
+        const unsigned branch=index/(ProjectRows*32),k=(index/32)%ProjectRows,c=index%32;
+        if constexpr(PackedProject)
+            projection[branch][k][c]=reinterpret_cast<const __half2*>(projectWeight)[
+                (size_t(batchBase+branch)*16+k)*32+c];
+        else projection[branch][k][c]=projectWeight[(size_t(batchBase+branch)*32+k)*32+c];
+    }
+    __syncthreads();
+    #pragma unroll
+    for(unsigned r=0;r<RowsPerThread;++r){
+        const unsigned tileRow=threadIdx.y+r*RowThreads,row=blockIdx.y*TileRows+tileRow;
+        if(row<rows){
+            __half merged=__float2half(0);
+            #pragma unroll
+            for(unsigned branch=0;branch<4;++branch){
+                float sum=0;
+                #pragma unroll
+                for(unsigned k=0;k<32;k+=2){
+                    __half2 weightPair;
+                    if constexpr(PackedProject)weightPair=projection[branch][k/2][column];
+                    else weightPair=__halves2half2(projection[branch][k][column],projection[branch][k+1][column]);
+                    sum=amd_mixed_dot(__halves2half2(hidden[tileRow][branch][k],hidden[tileRow][branch][k+1]),
+                        weightPair,sum,false);
+                }
+                merged=__hadd(merged,__float2half(sum));
+            }
+            combined[size_t(row)*channels+outGroup*32+column]=pubh(merged);
+        }
+    }
+}
+
 } // namespace rdna2_nr

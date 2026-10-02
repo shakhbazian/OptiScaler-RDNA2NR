@@ -1,4 +1,5 @@
 #include "pch.h"
+#include <dlssnr/WorkingResolution.h>
 #include "DlssNr_Dx12_State.h"
 #include <dlssnr/NrBackendSelection.h>
 #include <dlssnr/native/NativeAdapter.h>
@@ -150,17 +151,15 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
     }
 
     // Only the model runs at working resolution; source and composition remain at native size.
-    float workScale = cfg.DlssNrWorkingScale.value_or_default();
-    if (!std::isfinite(workScale))
-        workScale = 1.0f;
-    workScale = std::clamp(workScale, 0.25f, 2.0f);
-    if (hip && (workScale != 1.0f || cfg.DlssNrSpatialCompression.value_or_default()))
+    const auto work = DlssNr::ModelResolution(width, height, cfg.DlssNrWorkingScale.value_or_default());
+    const float workScale = work.scale;
+    if (hip && cfg.DlssNrSpatialCompression.value_or_default())
     {
-        ReportSkipOnce("AMD HIP currently requires full working size without spatial compression");
+        ReportSkipOnce("AMD HIP peripheral compression is not supported");
         return;
     }
-    const auto workWidth = (unsigned int) (width * workScale + 0.5f);
-    const auto workHeight = (unsigned int) (height * workScale + 0.5f);
+    const auto workWidth = work.width;
+    const auto workHeight = work.height;
     const bool reduced = workWidth != width || workHeight != height;
 
     const auto spatialSettings = DlssNr::Spatial::ReadSettings(cfg);
@@ -613,7 +612,10 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
         ID3D12Resource* resolveAnswer =
             superDownOk ? (spatial ? nr.spatialAnswerNative : nr.outputNative) : ordinaryAnswer;
         bool enlargementReady = !spatialDownFailed;
-        const auto transfer = cfg.DlssNrTransfer.value_or_default();
+        // An INI inherited from NVIDIA may request its DLSS enlargement.
+        // HIP uses the corresponding common composition mode instead.
+        const auto transfer = hip ? DlssNrSpatialTransfer(cfg.DlssNrTransfer.value_or_default())
+                                  : cfg.DlssNrTransfer.value_or_default();
         bool resizeFieldReadable = false;
         if (resolveParams.DebugView != 4 && !spatialDownFailed && DlssNrUsesDlssEnlargement(transfer) && reduced &&
             (transfer == 2 || workScale < 1.0f))

@@ -34,6 +34,21 @@ void FFXFeature::QueryVersionsDx12(ID3D12Device* device)
     versionQuery.versionIds = State::Instance().ffxUpscalerVersionIds.data();
     versionQuery.versionNames = State::Instance().ffxUpscalerVersionNames.data();
     FfxApiProxy::D3D12_Query(nullptr, &versionQuery.header);
+
+    // Version indices vary with the adapter and runtime; prefer FSR 3 by name.
+    auto& index = Config::Instance()->FfxUpscalerIndex;
+    if (!index.has_value())
+    {
+        const auto& names = State::Instance().ffxUpscalerVersionNames;
+        for (size_t i = 0; i < names.size(); ++i)
+        {
+            if (names[i] != nullptr && std::string_view(names[i]).starts_with("3."))
+            {
+                index.set_volatile_value(static_cast<int>(i));
+                break;
+            }
+        }
+    }
 }
 
 void FFXFeature::QueryVersionsVulkan()

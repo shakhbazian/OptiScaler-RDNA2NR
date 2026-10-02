@@ -1,5 +1,13 @@
 # Changelog
 
+## r2-0.8.91
+
+- Faster HIP matrix execution with calibrated static INT8, folded scales, longer INT32 accumulation, fused handoffs and attention workspace reuse. The network and controls are retained; 32-channel QKV and attention remain FP16.
+- NR model resolution now supports 25–200% before or after upscaling while preserving the output frame size.
+- New defaults: Standard, 75% NR resolution, pre-upscale placement, FSR 3 when available and XeFG when its libraries are present. Existing INI files are preserved.
+- Fix NR being skipped when the shared D3D12 lifetime tracker is active.
+- Reuses the existing converted model cache. See the [release notes](docs/release-notes/r2-0.8.91.md).
+
 ## r1-0.8.91
 
 First public release of OptiScaler-RDNA2NR, based on wilsjo2's OptiScaler-DLSSNR v0.8.91.

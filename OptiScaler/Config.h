@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "SysUtils.h"
 #include "State.h"
@@ -261,7 +261,7 @@ class Config
     // User-created NRWGT package. Empty selects the per-user RDNA2-NR model cache.
     CustomOptional<std::string> DlssNrModelPath { "" };
     CustomOptional<bool> DlssNrTemporalAccumulation { true };
-    CustomOptional<bool> DlssNrRunBeforeSr { false };
+    CustomOptional<bool> DlssNrRunBeforeSr { true };
     CustomOptional<bool> DlssNrFinishedPicture { false };
     // Fit the scene-to-finished HDR response for early residuals.
     CustomOptional<bool> DlssNrHdrTransfer { false };
@@ -335,7 +335,7 @@ class Config
     CustomOptional<float> DlssNrTagScale { 1.5f };
 
     // Model width/height scale; composition remains at the input size.
-    CustomOptional<float> DlssNrWorkingScale { 1.0f };
+    CustomOptional<float> DlssNrWorkingScale { 0.75f };
 
     CustomOptional<bool> DlssNrSpatialCompression { false };
     CustomOptional<float> DlssNrSpatialCenterX { 80.0f };
@@ -509,7 +509,7 @@ class Config
     };
 
     // Hotfixes
-    CustomOptional<bool> CheckForUpdate { true };
+    CustomOptional<bool> CheckForUpdate { false };
     CustomOptional<bool, SoftDefault> DisableOverlays { false };
 
     CustomOptional<bool> SimulateWaitableObject { false };
@@ -548,8 +548,8 @@ class Config
     CustomOptional<bool> CreateD3D12DeviceForLuma { false };
 
     // Upscalers
-    CustomOptional<Upscaler, SoftDefault> Dx11Upscaler { Upscaler::FSR22 };
-    CustomOptional<Upscaler, SoftDefault> Dx12Upscaler { Upscaler::XeSS };
+    CustomOptional<Upscaler, SoftDefault> Dx11Upscaler { Upscaler::FFX_on12 };
+    CustomOptional<Upscaler, SoftDefault> Dx12Upscaler { Upscaler::FFX };
     CustomOptional<Upscaler, SoftDefault> VulkanUpscaler { Upscaler::FSR22 };
 
     // Output Scaling
@@ -628,8 +628,8 @@ class Config
     CustomOptional<int> LateAsiPluginsDelay { 30 };
 
     // Frame Generation
-    CustomOptional<FGInput> FGInput { FGInput::NoFG };
-    CustomOptional<FGOutput> FGOutput { FGOutput::NoFG };
+    CustomOptional<FGInput> FGInput { FGInput::Upscaler };
+    CustomOptional<FGOutput> FGOutput { FGOutput::XeFG };
     CustomOptional<FGNvngxReplacement> FGNvngxReplacement { FGNvngxReplacement::Nukems };
     CustomOptional<bool> FGDrawUIOverFG { false };
     CustomOptional<bool> FGUIPremultipliedAlpha { true };

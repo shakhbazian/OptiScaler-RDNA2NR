@@ -333,15 +333,71 @@ __global__ void fused_c32_ffn_packed(const __half* input,const __half* expandWei
     }
 }
 
+// Research candidate: the complete small weight matrix replaces four panels.
+// The two products keep their original ordered DOT2 sums and half boundaries.
+// Reuse expand-weight storage only after every thread has published hidden.
+template<int Rows,int Threads=256>
+__global__ void research_c32_full_panels(const __half* input,const __half* expandWeight,
+    const __half* contractWeight,const __half* cosine,__half* output,int rows) {
+    __shared__ __half2 inputs[Rows][16];
+    __shared__ __half hidden[Rows][128];
+    __shared__ __half2 weights[2048];
+    const int tid=threadIdx.x,first=blockIdx.x*Rows;
+    for(int index=tid;index<Rows*16;index+=Threads){
+        const int r=index/16,p=index%16;
+        inputs[r][p]=first+r<rows?*reinterpret_cast<const __half2*>(input+size_t(first+r)*32+p*2):__float2half2_rn(0.f);
+    }
+    for(int index=tid;index<2048;index+=Threads){
+        const int p=index/128,c=index%128;
+        weights[index]=__halves2half2(expandWeight[(p*2)*128+c],expandWeight[(p*2+1)*128+c]);
+    }
+    __syncthreads();
+    for(int index=tid;index<Rows*128;index+=Threads){
+        const int r=index/128,c=index%128;
+        float sum=0;
+        #pragma unroll
+        for(int p=0;p<16;++p)sum=amd_mixed_dot(inputs[r][p],weights[p*128+c],sum,false);
+        hidden[r][c]=pubh(rdna2_nr::ffn_gate(__float2half(sum)));
+    }
+    __syncthreads();
+    for(int index=tid;index<2048;index+=Threads){
+        const int p=index/32,c=index%32;
+        weights[index]=__halves2half2(contractWeight[(p*2)*32+c],contractWeight[(p*2+1)*32+c]);
+    }
+    __syncthreads();
+    for(int index=tid;index<Rows*32;index+=Threads){
+        const int r=index/32,c=index%32;
+        float sum=0;
+        #pragma unroll
+        for(int p=0;p<64;++p)sum=amd_mixed_dot(*reinterpret_cast<const __half2*>(hidden[r]+p*2),weights[p*32+c],sum,false);
+        if(first+r<rows)output[size_t(first+r)*32+c]=__hadd(__float2half(sum),__hmul(input[size_t(first+r)*32+c],cosine[c]));
+    }
+}
+
 // W8A8 version of the resident C32 FFN. Input and gated-hidden quantization
 // stay inside the 16-row workgroup; the 128-channel intermediate never reaches
 // global memory. Scales use the selected group-16/group-32 contract for both
 // matrices. This is a deliberately separate light-runtime experiment.
+// Generated from calibration-only scenes; paired power-of-two scales.
+__device__ __constant__ float research_inverse_scales[10][160]={
+{0.5f,0.5f,0.5f,2.0f,0.5f,0.5f,0.5f,1.0f,1.0f,0.5f,1.0f,4.0f,0.5f,1.0f,2.0f,2.0f,0.5f,0.5f,2.0f,1.0f,2.0f,2.0f,0.5f,0.5f,2.0f,2.0f,1.0f,1.0f,2.0f,0.5f,4.0f,1.0f,0.5f,0.5f,0.5f,0.5f,1.0f,0.5f,0.5f,1.0f,0.5f,1.0f,0.5f,1.0f,0.5f,0.5f,0.5f,1.0f,1.0f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,2.0f,0.5f,0.5f,0.5f,1.0f,1.0f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,1.0f,0.5f,0.5f,0.5f,0.5f,0.5f,1.0f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,1.0f,1.0f,0.5f,0.5f,0.5f,1.0f,1.0f,0.5f,0.5f,0.5f,1.0f,0.5f,1.0f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,1.0f,0.5f,0.5f,1.0f,1.0f,1.0f,1.0f,0.5f,1.0f,0.5f,0.5f,0.5f,1.0f,0.5f,1.0f,1.0f,0.5f,0.5f,0.5f,0.5f,0.5f,2.0f,1.0f,2.0f,1.0f,0.5f,0.5f,0.5f,0.5f,0.5f,1.0f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,0.5f,1.0f,0.5f,1.0f,0.5f,0.5f,0.5f,1.0f,0.5f,0.5f,0.5f,1.0f,0.5f,0.5f,0.5f,1.0f,0.5f,0.5f,0.5f},
+{0.5f,0.5f,0.5f,1.0f,0.5f,0.5f,0.5f,1.0f,0.5f,1.0f,1.0f,0.5f,0.5f,0.5f,0.5f,1.0f,0.5f,0.5f,0.5f,2.0f,1.0f,0.125f,1.0f,0.5f,0.25f,0.125f,1.0f,2.0f,0.25f,1.0f,0.125f,1.0f,0.125f,0.125f,0.25f,0.125f,0.5f,0.25f,0.25f,0.25f,0.5f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.125f,0.25f,0.25f,0.5f,0.25f,0.25f,0.5f,0.5f,0.25f,0.25f,0.5f,0.25f,0.25f,0.125f,0.25f,0.25f,0.125f,0.125f,0.25f,0.25f,0.25f,0.25f,0.25f,0.125f,0.5f,0.25f,0.5f,0.125f,0.5f,0.25f,0.25f,0.25f,0.25f,0.25f,0.125f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.125f,0.25f,0.25f,0.25f,0.25f,0.5f,0.125f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.5f,0.125f,0.25f,0.25f,0.5f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.5f,0.125f,0.25f,0.125f,0.25f,0.25f,0.125f,0.125f,0.125f,1.0f,0.25f,0.25f,0.25f,0.125f,0.125f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.5f,0.125f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.125f,0.5f,0.125f,0.125f,0.25f,0.25f},
+{0.5f,0.5f,0.25f,0.5f,0.5f,0.5f,0.25f,0.5f,0.0625f,0.5f,1.0f,0.5f,0.5f,0.5f,0.5f,0.25f,0.25f,0.5f,1.0f,0.25f,1.0f,0.25f,0.5f,0.5f,0.25f,0.125f,0.5f,0.5f,0.25f,0.5f,0.125f,0.5f,0.0625f,0.25f,0.25f,0.125f,0.125f,0.25f,0.125f,0.25f,0.25f,0.125f,0.125f,1.0f,0.125f,0.25f,0.125f,0.125f,0.125f,0.125f,0.25f,0.125f,0.125f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.25f,0.25f,0.125f,0.125f,0.25f,0.25f,0.25f,0.25f,0.125f,0.25f,0.125f,0.25f,0.125f,0.125f,0.25f,0.25f,0.5f,0.25f,0.125f,0.125f,0.125f,0.25f,0.25f,0.25f,0.125f,0.25f,0.25f,0.25f,0.125f,0.25f,0.25f,0.125f,0.0625f,0.25f,0.25f,0.0625f,0.5f,0.25f,0.25f,0.125f,0.125f,0.125f,0.125f,0.25f,0.25f,0.25f,0.125f,0.25f,0.25f,0.25f,0.125f,0.25f,0.125f,0.25f,0.125f,0.125f,0.0625f,0.25f,0.25f,0.125f,0.25f,0.0625f,0.125f,0.125f,0.25f,0.25f,0.125f,0.25f,0.125f,0.25f,0.125f,0.125f,0.25f,0.0625f,0.25f,0.125f,0.125f,0.25f,0.25f,0.25f,0.125f,0.125f,0.25f,0.5f,0.25f,0.0625f,0.0625f,0.5f,0.125f,0.25f,0.25f,0.25f,0.125f,0.0625f,0.25f,0.125f,0.125f,0.125f,0.125f,0.125f},
+{0.25f,0.5f,0.5f,0.25f,0.25f,0.5f,0.5f,0.5f,0.125f,0.125f,0.5f,0.25f,0.5f,0.5f,0.5f,0.125f,0.125f,0.25f,0.5f,0.125f,0.5f,0.5f,0.25f,0.25f,0.5f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.5f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f},
+{0.5f,0.5f,1.0f,0.25f,0.5f,0.5f,0.5f,0.5f,0.25f,0.25f,0.25f,0.125f,0.5f,0.5f,0.125f,0.5f,0.25f,0.5f,0.5f,0.25f,0.5f,0.125f,0.5f,0.25f,0.25f,0.25f,0.25f,0.25f,0.125f,0.5f,0.125f,0.5f,0.0625f,0.0625f,0.125f,0.0625f,0.03125f,0.0625f,0.03125f,0.0625f,0.125f,0.125f,0.125f,0.125f,0.0625f,0.03125f,0.0625f,0.125f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.03125f,0.125f,0.125f,0.0625f,0.125f,0.03125f,0.125f,0.0625f,0.03125f,0.125f,0.03125f,0.125f,0.0625f,0.0625f,0.0625f,0.125f,0.0625f,0.125f,0.03125f,0.125f,0.0625f,0.0625f,0.03125f,0.0625f,0.03125f,0.25f,0.0625f,0.125f,0.0625f,0.25f,0.03125f,0.03125f,0.03125f,0.125f,0.125f,0.25f,0.0625f,0.0625f,0.03125f,0.125f,0.125f,0.0625f,0.0625f,0.0625f,0.25f,0.125f,0.0625f,0.125f,0.125f,0.03125f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.03125f,0.0625f,0.125f,0.03125f,0.125f,0.125f,0.125f,0.03125f,0.0625f,0.0625f,0.125f,0.125f,0.0625f,0.0625f,0.0625f,0.125f,0.25f,0.03125f,0.03125f,0.03125f,0.0625f,0.125f,0.125f,0.0625f,0.03125f,0.0625f,0.03125f,0.0625f,0.03125f,0.03125f,0.125f,0.03125f,0.125f,0.03125f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.125f,0.03125f,0.0625f,0.0625f,0.0625f,0.0625f},
+{0.0625f,0.0625f,0.0625f,0.03125f,0.03125f,0.03125f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.125f,0.03125f,0.0625f,0.25f,0.0625f,0.0625f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.0625f,0.0625f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.0625f,0.125f,0.125f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f},
+{0.25f,0.125f,0.125f,0.0625f,0.0625f,0.125f,0.25f,0.25f,0.25f,0.125f,0.125f,0.25f,0.125f,0.25f,0.25f,0.125f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.0625f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.03125f,0.03125f,0.0625f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.03125f,0.03125f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.0625f,0.03125f,0.03125f,0.03125f,0.03125f,0.0625f,0.0625f,0.0625f,0.03125f,0.03125f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.03125f,0.0625f,0.0625f,0.03125f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.03125f,0.03125f,0.0625f,0.0625f},
+{0.25f,0.25f,0.125f,0.0625f,0.0625f,0.125f,0.25f,0.25f,0.25f,0.25f,0.125f,0.25f,0.125f,0.25f,0.25f,0.125f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.25f,0.015625f,0.03125f,0.03125f,0.03125f,0.03125f,0.0625f,0.015625f,0.0625f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.015625f,0.03125f,0.03125f,0.0625f,0.03125f,0.015625f,0.03125f,0.015625f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.015625f,0.03125f,0.015625f,0.03125f,0.0625f,0.03125f,0.125f,0.03125f,0.03125f,0.03125f,0.015625f,0.03125f,0.03125f,0.0625f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.0625f,0.03125f,0.03125f,0.0625f,0.03125f,0.03125f,0.03125f,0.015625f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.015625f,0.015625f,0.03125f,0.03125f,0.03125f,0.0625f,0.03125f,0.03125f,0.03125f,0.03125f,0.0625f,0.015625f,0.03125f,0.03125f,0.0625f,0.03125f,0.03125f,0.015625f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.0625f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.015625f,0.015625f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.03125f,0.015625f},
+{0.0625f,0.0625f,0.125f,0.03125f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.125f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.125f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f},
+{0.125f,0.0625f,0.125f,1.0f,0.125f,0.0625f,0.125f,0.25f,0.0625f,0.125f,0.0625f,0.25f,0.0625f,0.125f,0.5f,0.125f,0.0625f,0.25f,0.125f,0.0625f,0.125f,0.25f,1.0f,0.125f,0.25f,0.5f,0.0625f,0.0625f,0.5f,0.0625f,0.5f,0.125f,0.25f,0.125f,0.25f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.25f,0.125f,0.25f,0.25f,0.125f,0.125f,0.125f,0.125f,0.25f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.25f,0.125f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.125f,0.125f,0.0625f,0.25f,0.125f,0.25f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.125f,0.125f,0.25f,0.25f,0.25f,0.125f,0.125f,0.0625f,0.25f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.25f,0.0625f,0.125f,0.0625f,0.25f,0.125f,0.125f,0.125f,0.25f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.25f,0.125f,0.125f,0.25f,0.125f,0.125f,0.25f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.0625f,0.25f,0.125f,0.25f,0.125f,0.125f}
+};
+__device__ float research_inverse(unsigned block,unsigned channel){return research_inverse_scales[block<5?block:block-61][channel];}
+
 template<unsigned GroupSize>
 __global__ void fused_c32_ffn_w8a8(const __half* input,
                                    const std::int8_t* expandWeight,const float* expandScale,
                                    const std::int8_t* contractWeight,const float* contractScale,
-                                   const __half* cosine,__half* output,int rows,unsigned* status) {
+                                   const __half* cosine,__half* output,int rows,unsigned* status,unsigned block) {
     static_assert(GroupSize==16||GroupSize==32,"supported resident C32 group size");
     constexpr int TileRows=16,Channels=32,Hidden=128,RowsPerThread=4,
         RowThreads=TileRows/RowsPerThread,DotGroups=Channels/4,ScaleGroups=Channels/GroupSize;
@@ -355,7 +411,7 @@ __global__ void fused_c32_ffn_w8a8(const __half* input,
     #pragma unroll
     for(int r=0;r<RowsPerThread;++r){
         const int tileRow=threadIdx.y+r*RowThreads,row=firstRow+r*RowThreads;
-        const float value=row<rows?__half2float(input[size_t(row)*Channels+lane]):0.f;
+        const float value=row<rows?__half2float(__float2half(__half2float(input[size_t(row)*Channels+lane])*research_inverse(block,lane))):0.f;
         if(!isfinite(value))atomicOr(status,1u);
         const int scaleGroup=lane/GroupSize,scaleLane=lane%GroupSize;
         float maximum=fabsf(value);
@@ -394,7 +450,7 @@ __global__ void fused_c32_ffn_w8a8(const __half* input,
                 sum+=float(partial)*combined;
             }
             const __half gated=pubh(rdna2_nr::ffn_gate(__float2half(sum)));
-            const float value=__half2float(gated);
+            const float value=__half2float(__float2half(__half2float(gated)*research_inverse(block,32+chunk*32+lane)));
             if(!isfinite(value))atomicOr(status,1u);
             const int scaleGroup=lane/GroupSize,scaleLane=lane%GroupSize;
             float maximum=fabsf(value);
@@ -443,6 +499,196 @@ __global__ void fused_c32_ffn_w8a8(const __half* input,
         const int row=firstRow+r*RowThreads;
         if(row<rows)output[size_t(row)*Channels+lane]=__hadd(
             __float2half(sums[r]),__hmul(input[size_t(row)*Channels+lane],cosine[lane]));
+    }
+}
+
+// Fitted on eight scenes; held-out scenes never select ranges.
+__device__ __constant__ float research_fixed_scale[10][5]={
+{8.184203878e-03f,2.460629912e-03f,2.706693020e-03f,2.544119023e-03f,3.198819002e-03f},
+{8.858268149e-03f,5.413386039e-03f,7.381889969e-03f,4.921259824e-03f,6.397638004e-03f},
+{1.377952751e-02f,8.858268149e-03f,9.842519648e-03f,7.381889969e-03f,1.082677208e-02f},
+{2.559055202e-02f,1.574803144e-01f,1.417322904e-01f,2.047244161e-01f,1.181102395e-01f},
+{7.874015719e-02f,1.377952751e-02f,1.771653630e-02f,2.165354416e-02f,1.771653630e-02f},
+{6.299212575e-02f,4.724409580e-01f,6.929134130e-01f,5.669291615e-01f,6.299212575e-01f},
+{1.732283533e-01f,3.543307260e-02f,3.149606287e-02f,3.149606287e-02f,3.543307260e-02f},
+{1.732283533e-01f,1.574803144e-02f,1.377952751e-02f,1.476377994e-02f,1.574803144e-02f},
+{7.874015719e-02f,6.299212575e-01f,6.929134130e-01f,5.883023739e-01f,6.299212575e-01f},
+{3.197830170e-02f,1.082677208e-02f,1.082677208e-02f,1.082677208e-02f,1.082677208e-02f}
+};
+__device__ __constant__ float research_fixed_inverse[10][5]={
+{1.221865921e+02f,4.063999939e+02f,3.694545593e+02f,3.930633545e+02f,3.126153870e+02f},
+{1.128888855e+02f,1.847272797e+02f,1.354666595e+02f,2.031999969e+02f,1.563076935e+02f},
+{7.257142639e+01f,1.128888855e+02f,1.015999985e+02f,1.354666595e+02f,9.236363983e+01f},
+{3.907692337e+01f,6.349999905e+00f,7.055555344e+00f,4.884615421e+00f,8.466666222e+00f},
+{1.269999981e+01f,7.257142639e+01f,5.644444275e+01f,4.618181992e+01f,5.644444275e+01f},
+{1.587500000e+01f,2.116666555e+00f,1.443181872e+00f,1.763888836e+00f,1.587499976e+00f},
+{5.772727489e+00f,2.822222137e+01f,3.175000000e+01f,3.175000000e+01f,2.822222137e+01f},
+{5.772727489e+00f,6.350000000e+01f,7.257142639e+01f,6.773332977e+01f,6.350000000e+01f},
+{1.269999981e+01f,1.587499976e+00f,1.443181872e+00f,1.699806213e+00f,1.587499976e+00f},
+{3.127120209e+01f,9.236363983e+01f,9.236363983e+01f,9.236363983e+01f,9.236363983e+01f}
+};
+
+__global__ void research_c32_fixed(const __half* input,
+                                   const std::int8_t* expandWeight,const float* expandScale,
+                                   const std::int8_t* contractWeight,const float* contractScale,
+                                   const __half* cosine,__half* output,int rows,unsigned* status,unsigned block) {
+    constexpr unsigned GroupSize=32;
+    const unsigned blockIndex=block<5?block:block-61;
+    constexpr int TileRows=16,Channels=32,Hidden=128,RowsPerThread=4,
+        RowThreads=TileRows/RowsPerThread,DotGroups=Channels/4,ScaleGroups=Channels/GroupSize;
+    __shared__ std::int8_t inputTile[TileRows][Channels];
+    __shared__ std::int8_t hiddenTile[TileRows][Hidden];
+    __shared__ float inputScale[TileRows][Channels/16];
+    __shared__ float hiddenScale[TileRows][Hidden/16];
+    __shared__ std::int32_t weightTile[DotGroups][Channels+1];
+    const int lane=threadIdx.x,local=threadIdx.y*Channels+lane;
+    const int firstRow=blockIdx.x*TileRows+threadIdx.y;
+    #pragma unroll
+    for(int r=0;r<RowsPerThread;++r){
+        const int tileRow=threadIdx.y+r*RowThreads,row=firstRow+r*RowThreads;
+        const float value=row<rows?__half2float(__float2half(__half2float(input[size_t(row)*Channels+lane])*research_inverse(block,lane))):0.f;
+        if(!isfinite(value))atomicOr(status,1u);
+        const int scaleGroup=lane/GroupSize,scaleLane=lane%GroupSize;
+        const float scale=research_fixed_scale[blockIndex][0],inv=research_fixed_inverse[blockIndex][0];
+        if(scaleLane==0)inputScale[tileRow][scaleGroup]=scale;
+        inputTile[tileRow][lane]=std::int8_t(max(-127,min(127,__float2int_rn(value*inv))));
+    }
+    __syncthreads();
+    for(int chunk=0;chunk<Hidden/Channels;++chunk){
+        for(int index=local;index<Channels*DotGroups;index+=Channels*RowThreads){
+            const int column=index/DotGroups,g=index%DotGroups;
+            weightTile[g][column]=*reinterpret_cast<const std::int32_t*>(
+                expandWeight+size_t(chunk*Channels+column)*Channels+g*4);
+        }
+        __syncthreads();
+        #pragma unroll
+        for(int r=0;r<RowsPerThread;++r){
+            const int tileRow=threadIdx.y+r*RowThreads;
+            float sum=0;
+            #pragma unroll
+            for(int scaleGroup=0;scaleGroup<ScaleGroups;++scaleGroup){
+                int partial=0;
+                #pragma unroll
+                for(unsigned g=0;g<GroupSize/4;++g){
+                    const int dotGroup=scaleGroup*(GroupSize/4)+g;
+                    const char4 av=*reinterpret_cast<const char4*>(inputTile[tileRow]+dotGroup*4);
+                    const char4 bv=*reinterpret_cast<const char4*>(&weightTile[dotGroup][lane]);
+                    partial=amd_mixed_dot(av,bv,partial,false);
+                }
+                const int weightColumn=chunk*Channels+lane;
+                const float combined=inputScale[tileRow][scaleGroup]*
+                    expandScale[scaleGroup*Hidden+weightColumn];
+                sum+=float(partial)*combined;
+            }
+            const __half gated=pubh(rdna2_nr::ffn_gate(__float2half(sum)));
+            const float value=__half2float(__float2half(__half2float(gated)*research_inverse(block,32+chunk*32+lane)));
+            if(!isfinite(value))atomicOr(status,1u);
+            const int scaleGroup=lane/GroupSize,scaleLane=lane%GroupSize;
+            const float scale=research_fixed_scale[blockIndex][1+chunk],inv=research_fixed_inverse[blockIndex][1+chunk];
+            if(scaleLane==0)hiddenScale[tileRow][chunk*ScaleGroups+scaleGroup]=scale;
+            hiddenTile[tileRow][chunk*Channels+lane]=
+                std::int8_t(max(-127,min(127,__float2int_rn(value*inv))));
+        }
+        __syncthreads();
+    }
+    float sums[RowsPerThread]={};
+    for(int chunk=0;chunk<Hidden/Channels;++chunk){
+        for(int index=local;index<Channels*DotGroups;index+=Channels*RowThreads){
+            const int column=index/DotGroups,g=index%DotGroups;
+            weightTile[g][column]=*reinterpret_cast<const std::int32_t*>(
+                contractWeight+size_t(column)*Hidden+chunk*Channels+g*4);
+        }
+        __syncthreads();
+        #pragma unroll
+        for(int r=0;r<RowsPerThread;++r){
+            const int tileRow=threadIdx.y+r*RowThreads;
+            #pragma unroll
+            for(int scaleGroup=0;scaleGroup<ScaleGroups;++scaleGroup){
+                int partial=0;
+                #pragma unroll
+                for(unsigned g=0;g<GroupSize/4;++g){
+                    const int dotGroup=scaleGroup*(GroupSize/4)+g;
+                    const char4 av=*reinterpret_cast<const char4*>(
+                        hiddenTile[tileRow]+chunk*Channels+dotGroup*4);
+                    const char4 bv=*reinterpret_cast<const char4*>(&weightTile[dotGroup][lane]);
+                    partial=amd_mixed_dot(av,bv,partial,false);
+                }
+                const int globalGroup=chunk*ScaleGroups+scaleGroup;
+                const float combined=hiddenScale[tileRow][globalGroup]*
+                    contractScale[globalGroup*Channels+lane];
+                sums[r]+=float(partial)*combined;
+            }
+        }
+        __syncthreads();
+    }
+    #pragma unroll
+    for(int r=0;r<RowsPerThread;++r){
+        const int row=firstRow+r*RowThreads;
+        if(row<rows)output[size_t(row)*Channels+lane]=__hadd(
+            __float2half(sums[r]),__hmul(input[size_t(row)*Channels+lane],cosine[lane]));
+    }
+}
+
+
+// All small weights fit in LDS. Fixed activation scales eliminate reductions.
+// Compare the complete network with the panel kernel before using its timings.
+#ifndef NR_FIXED_ROW_THREADS
+#define NR_FIXED_ROW_THREADS 4
+#endif
+__global__ void research_c32_fixed_full(const __half* input,
+    const std::int8_t* expandWeight,const float* expandScale,
+    const std::int8_t* contractWeight,const float* contractScale,
+    const __half* cosine,__half* output,int rows,unsigned* status,unsigned block) {
+    constexpr int Rows=16,RowThreads=NR_FIXED_ROW_THREADS,RowsPerThread=Rows/RowThreads;
+    __shared__ std::int8_t x[Rows][32],hidden[Rows][128];
+    __shared__ std::int32_t weights[32*33];
+    const unsigned index=block<5?block:block-61;
+    const int lane=threadIdx.x,tid=threadIdx.y*32+lane;
+    const int first=blockIdx.x*Rows+threadIdx.y;
+    #pragma unroll
+    for(int r=0;r<RowsPerThread;++r){
+        const int tr=threadIdx.y+r*RowThreads,row=first+r*RowThreads;
+        const float value=row<rows?__half2float(__float2half(__half2float(input[size_t(row)*32+lane])*research_inverse(block,lane))):0.f;
+        if(!isfinite(value))atomicOr(status,1u);
+        x[tr][lane]=std::int8_t(max(-127,min(127,__float2int_rn(value*research_fixed_inverse[index][0]))));
+    }
+    for(int i=tid;i<1024;i+=32*RowThreads){
+        const int col=i/8,q=i%8;weights[q*129+col]=reinterpret_cast<const std::int32_t*>(expandWeight)[i];
+    }
+    __syncthreads();
+    for(int chunk=0;chunk<4;++chunk){
+        #pragma unroll
+        for(int r=0;r<RowsPerThread;++r){
+            const int tr=threadIdx.y+r*RowThreads;int partial=0;
+            #pragma unroll
+            for(int q=0;q<8;++q)partial=amd_mixed_dot(*reinterpret_cast<const char4*>(x[tr]+q*4),
+                *reinterpret_cast<const char4*>(weights+q*129+chunk*32+lane),partial,false);
+            const float combined=research_fixed_scale[index][0]*expandScale[chunk*32+lane];
+            float sum=0;sum+=float(partial)*combined;
+            const __half gated=pubh(rdna2_nr::ffn_gate(__float2half(sum)));
+            const float value=__half2float(__float2half(__half2float(gated)*research_inverse(block,32+chunk*32+lane)));
+            if(!isfinite(value))atomicOr(status,1u);
+            hidden[tr][chunk*32+lane]=std::int8_t(max(-127,min(127,__float2int_rn(value*research_fixed_inverse[index][1+chunk]))));
+        }
+    }
+    __syncthreads();
+    for(int i=tid;i<1024;i+=32*RowThreads){
+        const int col=i/32,q=i%32;weights[q*33+col]=reinterpret_cast<const std::int32_t*>(contractWeight)[i];
+    }
+    __syncthreads();
+    #pragma unroll
+    for(int r=0;r<RowsPerThread;++r){
+        const int tr=threadIdx.y+r*RowThreads,row=first+r*RowThreads;float sum=0;
+        #pragma unroll
+        for(int chunk=0;chunk<4;++chunk){
+            int partial=0;
+            #pragma unroll
+            for(int q=0;q<8;++q)partial=amd_mixed_dot(*reinterpret_cast<const char4*>(hidden[tr]+chunk*32+q*4),
+                *reinterpret_cast<const char4*>(weights+(chunk*8+q)*33+lane),partial,false);
+            const float combined=research_fixed_scale[index][1+chunk]*contractScale[chunk*32+lane];
+            sum+=float(partial)*combined;
+        }
+        if(row<rows)output[size_t(row)*32+lane]=__hadd(__float2half(sum),__hmul(input[size_t(row)*32+lane],cosine[lane]));
     }
 }
 
@@ -955,6 +1201,75 @@ __global__ void attention_windows_fused(const __half* qkv,const __half* bias,__h
     }
 }
 
+// Q/K become dead after scoring. Hold each thread's score words until all
+// readers finish, then reuse their storage for the probability matrix.
+template<unsigned ProbabilityStride,unsigned ChannelStride,unsigned Reuse>
+__device__ inline void research_c32_probabilities(__half*qkv,const __half*bias) {
+    static_assert(Reuse==1||Reuse==2,"supported workspace reuse");
+    static_assert(2*ChannelStride>=ProbabilityStride,"probabilities must not overlap V");
+    __shared__ unsigned separateKeys[Reuse==1?16*64:1];
+    __shared__ __half inverses[64];
+    const unsigned tid=threadIdx.x;
+    __half* const k=qkv+64*ChannelStride;
+    if constexpr(Reuse==2){
+        unsigned saved[4];
+        #pragma unroll
+        for(unsigned r=0;r<4;++r){
+            const unsigned i=tid+r*256,pair=i/64,token=i%64;
+            saved[r]=unsigned(__half_as_ushort(k[token*ChannelStride+pair*2]))|
+                (unsigned(__half_as_ushort(k[token*ChannelStride+pair*2+1]))<<16);
+        }
+        __syncthreads();
+        #pragma unroll
+        for(unsigned r=0;r<4;++r)__builtin_memcpy(k+2*(tid+r*256),&saved[r],4);
+    }else{
+        for(unsigned i=tid;i<16*64;i+=256){
+            const unsigned pair=i/64,token=i%64;
+            separateKeys[i]=unsigned(__half_as_ushort(k[token*ChannelStride+pair*2]))|
+                (unsigned(__half_as_ushort(k[token*ChannelStride+pair*2+1]))<<16);
+        }
+    }
+    __syncthreads();
+    unsigned scores[8];
+    #pragma unroll
+    for(unsigned r=0;r<8;++r){
+        const unsigned i=tid+r*256,row=i/32,column=(i%32)*2;
+        unsigned bits[2];
+        for(unsigned pair=0;pair<2;++pair){
+            float sum=0;
+            for(unsigned j=0;j<16;++j){
+                unsigned packed;
+                if constexpr(Reuse==2)__builtin_memcpy(&packed,k+2*(j*64+column+pair),4);
+                else packed=separateKeys[j*64+column+pair];
+                sum=amd_mixed_dot(__halves2half2(qkv[row*ChannelStride+j*2],qkv[row*ChannelStride+j*2+1]),
+                    __halves2half2(__ushort_as_half(packed&65535),__ushort_as_half(packed>>16)),sum,false);
+            }
+            const __half score=__hadd(__float2half(sum),bias[row*64+column+pair]);
+            __half weight=__hfma(score,__float2half(.044921875f),__float2half(1.30078125f));
+            weight=__float2half(fminf(1.5693359375f,fmaxf(1.03125f,__half2float(weight))));
+            bits[pair]=__half_as_ushort(weight);
+        }
+        scores[r]=((bits[0]|(bits[1]<<16))<<5)+0x7ff88000u;
+    }
+    __syncthreads();
+    __half* const probabilities=qkv;
+    #pragma unroll
+    for(unsigned r=0;r<8;++r){
+        const unsigned i=tid+r*256;
+        __builtin_memcpy(probabilities+(i/32)*ProbabilityStride+(i%32)*2,&scores[r],4);
+    }
+    __syncthreads();
+    if(tid<64){
+        __half total=__float2half(0);
+        for(unsigned col=0;col<64;++col)total=__hadd(total,probabilities[tid*ProbabilityStride+col]);
+        inverses[tid]=__float2half(1.f/__half2float(total));
+    }
+    __syncthreads();
+    for(unsigned i=tid;i<64*64;i+=256)
+        probabilities[(i/64)*ProbabilityStride+i%64]=pubh(__hmul(probabilities[(i/64)*ProbabilityStride+i%64],inverses[i/64]));
+    __syncthreads();
+}
+
 // C32 has one attention head.  Keep its QKV publication, probabilities, and
 // attended values in LDS, then project directly back to the spatial layout.
 // This preserves the original ascending DOT2/FMA reductions and the published
@@ -971,7 +1286,8 @@ __global__ void fused_c32_attention(const __half* input,const __half* qkvWeight,
                                     int h,int w,int top,int left,int paddedWidth,
                                     bool publish) {
     __shared__ __half qkv[3*64*ChannelStride];
-    __shared__ __half probabilities[64*ProbabilityStride];
+    __shared__ __half probabilityStorage[(Parallel&&WaveProjection)?1:64*ProbabilityStride];
+    __half* probabilities=(Parallel&&WaveProjection)?qkv:probabilityStorage;
     __shared__ __half attended[WaveProjection?1:64*32];
     const int window=blockIdx.x,tid=threadIdx.x;
     const int windowColumns=paddedWidth/8;
@@ -996,35 +1312,43 @@ __global__ void fused_c32_attention(const __half* input,const __half* qkvWeight,
         qkv[(index/32)*ChannelStride+index%32]=__float2half(sum);
     }
     __syncthreads();
-    if(tid<3*64){
-        const int kind=tid/64,token=tid%64;
-        __half* values=qkv+(kind*64+token)*ChannelStride;
-        __half inverse=__float2half(1);
+    // Eight lanes own one vector. Keep its four cells per lane in
+    // registers through normalization and publication; no second LDS read.
+    const unsigned component=unsigned(tid)%8;
+    for(unsigned vector=unsigned(tid)/8;vector<192;vector+=32){
+        const unsigned kind=vector/64;
+        __half* values=qkv+vector*ChannelStride;
+        __half cells[4];
+        #pragma unroll
+        for(unsigned j=0;j<4;++j)cells[j]=values[component+j*8];
+        unsigned inverseBits=__half_as_ushort(__float2half(1));
         if(kind<2){
-            __half part[4][2],pair[4][2];
-            for(int lane=0;lane<4;++lane)for(int p=0;p<2;++p){
-                const int q=lane*2+p;
-                const __half first=__hfma(values[q+8],values[q+8],
-                                          __hmul(values[q],values[q]));
-                const __half second=__hfma(values[q+24],values[q+24],
-                                           __hmul(values[q+16],values[q+16]));
-                part[lane][p]=__hadd(first,second);
+            const __half first=__hfma(cells[1],cells[1],__hmul(cells[0],cells[0]));
+            const __half second=__hfma(cells[3],cells[3],__hmul(cells[2],cells[2]));
+            const __half part=__hadd(first,second);
+            const unsigned pair=__half_as_ushort(__hadd(part,__ushort_as_half(__shfl_xor(unsigned(__half_as_ushort(part)),4,8))));
+            // Fetch with all lanes active before the single root evaluates
+            // the same half addition tree and reciprocal as the old kernel.
+            const unsigned p0=__shfl(pair,0,8),p1=__shfl(pair,1,8);
+            const unsigned p2=__shfl(pair,2,8),p3=__shfl(pair,3,8);
+            if(component==0){
+                __half norm=__hadd(__hadd(__ushort_as_half(p0),__ushort_as_half(p2)),__hadd(__ushort_as_half(p1),__ushort_as_half(p3)));
+                norm=__float2half(fmaxf(__half2float(norm),0.00006198883056640625f));
+                inverseBits=__half_as_ushort(__float2half(rsqrtf(__half2float(norm))));
             }
-            for(int lane=0;lane<4;++lane)for(int p=0;p<2;++p)
-                pair[lane][p]=__hadd(part[lane][p],part[lane^2][p]);
-            __half norm=__hadd(__hadd(pair[0][0],pair[1][0]),
-                               __hadd(pair[0][1],pair[1][1]));
-            norm=__float2half(fmaxf(__half2float(norm),0.00006198883056640625f));
-            inverse=__float2half(rsqrtf(__half2float(norm)));
+            inverseBits=__shfl(inverseBits,0,8);
         }
-        for(int channel=0;channel<32;++channel){
-            __half value=kind<2?__hmul(values[channel],inverse):values[channel];
+        #pragma unroll
+        for(unsigned j=0;j<4;++j){
+            __half value=kind<2?__hmul(cells[j],__ushort_as_half(inverseBits)):cells[j];
             if(kind==0)value=__hmul(value,scale[0]);
-            values[channel]=pubh(value);
+            values[component+j*8]=pubh(value);
         }
     }
     __syncthreads();
-    if constexpr(Parallel){
+    if constexpr(Parallel&&WaveProjection){
+        research_c32_probabilities<ProbabilityStride,ChannelStride,2>(qkv,bias);
+    }else if constexpr(Parallel){
         __shared__ unsigned keys[16*64];
         __shared__ __half inverses[64];
         window_probabilities_parallel<ProbabilityStride,ChannelStride>(qkv,qkv+64*ChannelStride,bias,probabilities,keys,inverses);
@@ -1139,7 +1463,7 @@ inline void launch_adapter_16x32(const __half*a,const __half*b,__half*c,int m){a
 inline void launch_fused_c32_ffn(const __half*input,const __half*expandWeight,
                                  const __half*contractWeight,const __half*cosine,
                                  __half*output,int rows,bool packed=false){
-    if(packed)fused_c32_ffn_packed<><<<(rows+15)/16,dim3(32,4),0,current_stream()>>>(
+    if(packed)research_c32_full_panels<32,256><<<(rows+31)/32,256,0,current_stream()>>>(
         input,expandWeight,contractWeight,cosine,output,rows);
     else fused_c32_ffn<><<<(rows+15)/16,dim3(32,4),0,current_stream()>>>(
         input,expandWeight,contractWeight,cosine,output,rows);

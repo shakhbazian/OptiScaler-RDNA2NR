@@ -644,6 +644,11 @@ bool FFXFeatureDx12::InitFFX(const NVSDK_NGX_Parameter* InParameters)
         ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
 
         QueryVersionsDx12(Device);
+        if (State::Instance().ffxUpscalerVersionIds.empty())
+        {
+            LOG_WARN("No FSR upscaler provider available for this device");
+            return false;
+        }
 
         InitFlags();
 
@@ -681,6 +686,7 @@ bool FFXFeatureDx12::InitFFX(const NVSDK_NGX_Parameter* InParameters)
             State::Instance().ffxUpscalerVersionNames[Config::Instance()->FfxUpscalerIndex.value_or_default()];
         _name = "FSR";
         parse_version(version);
+        LOG_INFO("FSR upscaler version: {}",version);
     }
 
     SetInit(true);

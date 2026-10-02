@@ -71,7 +71,7 @@ int wmain(int argc,wchar_t** argv) try {
     Check(argc!=10||native,"unknown output option");
     const unsigned frames=argc>=9?std::stoul(argv[7]):frameCount;
     Check(frames>=1&&frames<=(timed?360u:32u),"bounded frame count");
-    Check(mode==L"static"||mode==L"pan"||mode==L"pan_reset"||mode==L"occlusion"||mode==L"occlusion_reset"||mode==L"bad_motion"||mode==L"resize","unknown sequence mode");
+    Check(mode==L"scale_cycle"||mode==L"static"||mode==L"pan"||mode==L"pan_reset"||mode==L"occlusion"||mode==L"occlusion_reset"||mode==L"bad_motion"||mode==L"resize","unknown sequence mode");
     Check(w>=64&&h>=64&&NrV2::SupportedLogicalExtent(w,h)&&
         NrV2::SupportedGraphExtent(NrV2::AlignNetworkExtent(w),NrV2::AlignNetworkExtent(h)),
         "unsupported input extent");
@@ -113,6 +113,12 @@ int wmain(int argc,wchar_t** argv) try {
     auto evaluate=Entry<EvaluateFn>(dll,"NVSDK_NGX_D3D11_EvaluateFeature");
     auto release=Entry<ReleaseFn>(dll,"NVSDK_NGX_D3D11_ReleaseFeature");
     auto shutdown=Entry<ShutdownFn>(dll,"NVSDK_NGX_D3D11_Shutdown");
+    using Counter=unsigned(*)();using Count64=unsigned long long(*)();using ScaleFn=void(*)(float);
+    auto ready=Entry<Counter>(dll,"DlssNrNativeReady");
+    auto faults=Entry<Counter>(dll,"DlssNrNativeFaults");
+    auto appliedCount=Entry<Count64>(dll,"DlssNrNativeApplied");
+    ScaleFn setScale=mode==L"scale_cycle"?Entry<ScaleFn>(dll,"DlssNrNativeTestSetWorkingScale"):nullptr;
+    const auto initiallyApplied=appliedCount();
     Check(init(0x1337,L".",device.Get(),static_cast<NVSDK_NGX_Version>(0x15),nullptr)==NVSDK_NGX_Result_Success,"NGX init");
     NVSDK_NGX_Parameter* params=nullptr;Check(allocate(&params)==NVSDK_NGX_Result_Success&&params,"allocate params");
     params->Set(NVSDK_NGX_Parameter_Width,w);params->Set(NVSDK_NGX_Parameter_Height,h);
@@ -133,6 +139,10 @@ int wmain(int argc,wchar_t** argv) try {
     std::vector<float> z(std::size_t(w)*h,0.5f);
     const auto runStart=std::chrono::steady_clock::now();
     for(unsigned frame=0;frame<frames;++frame){
+        if(setScale&&frame%3==0){
+            constexpr float scales[]={1,.5f,.75f,1.25f,2,.25f,1};
+            setScale(scales[(frame/3)%7]);
+        }
         if(mode==L"occlusion"||mode==L"occlusion_reset"){
             movingColor=input;
             std::fill(mv.begin(),mv.end(),static_cast<unsigned short>(0));
@@ -189,6 +199,12 @@ int wmain(int argc,wchar_t** argv) try {
             continue;
         }
         auto pixels=Readback(device.Get(),ctx.Get(),output);
+        if(setScale&&!ready()){
+            for(unsigned i=0;i<6000&&!ready()&&!faults();++i)Sleep(5);
+            Check(ready()&&!faults(),"scaled DX11 session ready");
+            Check(evaluate(ctx.Get(),handle,params,nullptr)==NVSDK_NGX_Result_Success,"scaled DX11 Evaluate");
+            pixels=Readback(device.Get(),ctx.Get(),output);
+        }
         const auto readEnd=std::chrono::steady_clock::now();
         for(std::size_t i=0;i<pixels.size();i+=2){unsigned half=unsigned(pixels[i])|(unsigned(pixels[i+1])<<8);
             Check((half&0x7c00)!=0x7c00,"nonfinite FP16 output");}
@@ -313,5 +329,7 @@ int wmain(int argc,wchar_t** argv) try {
     std::printf("Lifecycle release_ms=%.3f pending_after_shutdown=%u cleanup_wait_ms=%.3f faulted=0\n",
         std::chrono::duration<double,std::milli>(releaseEnd-releaseStart).count(),initialPending,
         std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-retireWaitStart).count());
+    std::printf("NativeDx11Coverage applied=%llu faults=%u\n",applied()-initiallyApplied,faults());
+    Check(!faults(),"DX11 NR fault count");
     std::puts("PASS real OptiScaler DX11 Evaluate x4");return 0;
 }catch(const std::exception& e){std::fprintf(stderr,"FAIL Evaluate host: %s\n",e.what());return 1;}

@@ -609,15 +609,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_DestroyParameters(NVSDK_NGX_Param
 
 static Upscaler GetUpscalerBackend(bool allowOverride = true)
 {
-    Upscaler upscaler = Upscaler::XeSS; // Default
-
-    auto primaryGpu = IdentifyGpu::getPrimaryGpu();
-
-    if (NVNGXProxy::IsDx12Inited() && primaryGpu.dlssCapable)
-        upscaler = Upscaler::DLSS;
-
-    if (primaryGpu.fsr4Support != FSR4Support::None)
-        upscaler = Upscaler::FFX;
+    Upscaler upscaler = Upscaler::FFX; // Prefer FSR 3; explicit choices still win.
 
     if (allowOverride && Config::Instance()->Dx12Upscaler.has_value())
         upscaler = Config::Instance()->Dx12Upscaler.value();

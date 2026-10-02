@@ -30,7 +30,7 @@ Do not use the inherited `setup_windows.bat` for this AMD installation path. It 
 
 ## First launch
 
-Enable an in-game upscaler, open OptiScaler with **Insert**, and enter **DLSS Neural Rendering**. Enable NR, choose **Auto**, and start with NR before upscaling, one pass, 100% working size and **Apply model** enabled. A fresh configuration leaves NR disabled.
+Enable an in-game upscaler, open OptiScaler with **Insert**, and enter **DLSS Neural Rendering**. Enable NR, choose **Auto**, and start with NR before upscaling, Standard, one pass, 75% working size and **Apply model** enabled. A fresh configuration leaves NR disabled.
 
 Wait for **AMD HIP (gfx1030)** and an increasing **RDNA2 NR active** frame count. Toggle the master NR switch to compare the image and performance. The model-preparation and queue-preparation stages can take time on first use or after a resolution change.
 

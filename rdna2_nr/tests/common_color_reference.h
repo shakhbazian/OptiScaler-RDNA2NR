@@ -11,11 +11,11 @@ struct CommonColorReference {
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3D12PipelineState> pipeline;
     ComPtr<ID3D12DescriptorHeap> heap;
-    std::array<ComPtr<ID3D12Resource>,2> constants;
-    ComPtr<ID3D12Resource> proxy,original,answer,composed;
+    std::array<ComPtr<ID3D12Resource>,3> constants;
+    ComPtr<ID3D12Resource> proxy,original,answer,composed,workingProxy;
     ID3D12Device* device=nullptr;unsigned width=0,height=0,stride=0;
     ID3D12Resource* exposure=nullptr;
-    void Open(ID3D12Device* d,unsigned w,unsigned h,DXGI_FORMAT format=DXGI_FORMAT_R16G16B16A16_FLOAT){
+    void Open(ID3D12Device* d,unsigned w,unsigned h,DXGI_FORMAT format=DXGI_FORMAT_R16G16B16A16_FLOAT,unsigned workW=0,unsigned workH=0){
         if(device)return;device=d;width=w;height=h;
         D3D12_DESCRIPTOR_RANGE ranges[3]{};
         ranges[0]={D3D12_DESCRIPTOR_RANGE_TYPE_SRV,5,0,0,0};
@@ -34,7 +34,7 @@ struct CommonColorReference {
         D3D12_COMPUTE_PIPELINE_STATE_DESC pso{};pso.pRootSignature=root.Get();pso.CS={DlssNr_cso,sizeof(DlssNr_cso)};
         Hr(d->CreateComputePipelineState(&pso,IID_PPV_ARGS(&pipeline)),"reference codec pipeline");
         D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        hd.NumDescriptors=16;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        hd.NumDescriptors=24;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         Hr(d->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&heap)),"reference codec heap");
         stride=d->GetDescriptorHandleIncrementSize(hd.Type);
         D3D12_HEAP_PROPERTIES upload{};upload.Type=D3D12_HEAP_TYPE_UPLOAD;
@@ -43,7 +43,9 @@ struct CommonColorReference {
             D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&buffer)),"reference codec constants");
         auto td=TextureDesc(w,h,DXGI_FORMAT_R16G16B16A16_FLOAT,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         proxy=CreateTexture(d,td,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        answer=CreateTexture(d,td,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        auto work=td;if(workW&&workH){work.Width=workW;work.Height=workH;}
+        answer=CreateTexture(d,work,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        if(work.Width!=w||work.Height!=h)workingProxy=CreateTexture(d,work,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         td.Format=format;
         original=CreateTexture(d,td,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         composed=CreateTexture(d,td,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -70,7 +72,7 @@ struct CommonColorReference {
         auto gpu=heap->GetGPUDescriptorHandleForHeapStart();gpu.ptr+=UINT64(slot*8)*stride;
         ID3D12DescriptorHeap* heaps[]={heap.Get()};list->SetDescriptorHeaps(1,heaps);
         list->SetComputeRootSignature(root.Get());list->SetPipelineState(pipeline.Get());
-        list->SetComputeRootDescriptorTable(0,gpu);list->Dispatch((width+7)/8,(height+7)/8,1);
+        list->SetComputeRootDescriptorTable(0,gpu);list->Dispatch((value.Width+7)/8,(value.Height+7)/8,1);
     }
     DlssNrConstants Settings(bool hdr,bool apply,float strength){
         DlssNrConstants c{};c.WhitePoint=1;c.Width=width;c.Height=height;
@@ -89,11 +91,19 @@ struct CommonColorReference {
         std::swap(p.Transition.StateBefore,p.Transition.StateAfter);std::swap(o.Transition.StateBefore,o.Transition.StateAfter);
         list->ResourceBarrier(1,&p);list->ResourceBarrier(1,&o);
     }
+    ID3D12Resource* ModelInput(ID3D12GraphicsCommandList* list){
+        if(!workingProxy)return proxy.Get();
+        auto c=Settings(false,true,1);c.Mode=DlssNrMode_Downsample;
+        c.Width=unsigned(workingProxy->GetDesc().Width);c.Height=workingProxy->GetDesc().Height;
+        Dispatch(list,2,c,proxy.Get(),nullptr,nullptr,workingProxy.Get(),nullptr);
+        auto b=Barrier(workingProxy.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        list->ResourceBarrier(1,&b);return workingProxy.Get();
+    }
     void Resolve(ID3D12GraphicsCommandList* list,ID3D12Resource* color,bool post,bool hdr,bool apply=true,float strength=1){
         auto ready=Barrier(answer.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         list->ResourceBarrier(1,&ready);
         auto c=Settings(hdr,apply,strength);c.Mode=DlssNrMode_Resolve;
-        Dispatch(list,1,c,proxy.Get(),answer.Get(),original.Get(),composed.Get(),nullptr,exposure);
+        Dispatch(list,1,c,workingProxy?workingProxy.Get():proxy.Get(),answer.Get(),original.Get(),composed.Get(),nullptr,exposure);
         auto a=Barrier(composed.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
         auto b=Barrier(color,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
         list->ResourceBarrier(1,&a);list->ResourceBarrier(1,&b);list->CopyResource(color,composed.Get());
@@ -102,5 +112,6 @@ struct CommonColorReference {
         b.Transition.StateAfter=post?D3D12_RESOURCE_STATE_UNORDERED_ACCESS:D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         list->ResourceBarrier(1,&a);list->ResourceBarrier(1,&b);
         std::swap(ready.Transition.StateBefore,ready.Transition.StateAfter);list->ResourceBarrier(1,&ready);
+        if(workingProxy){auto restored=Barrier(workingProxy.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);list->ResourceBarrier(1,&restored);}
     }
 };

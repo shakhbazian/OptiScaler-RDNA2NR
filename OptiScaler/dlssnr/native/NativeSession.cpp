@@ -92,9 +92,20 @@ struct Owner {
             LOG_ERROR("Native NR companion could not load (Windows error {}): {}",GetLastError(),
             wstring_to_string(dll));return false;}
         auto get=reinterpret_cast<NrSubmissionApi::GetApi>(GetProcAddress(module,"DlssNrHipBackendGetScheduledApiV2"));
-        if(!get||get(NrExecution::AcceptedMixedId,NrSubmissionApi::Version,&api,sizeof(api))!=Status::Ok){
-            failureReason="HIP companion API or mixed-v5 contract is incompatible";
-            LOG_ERROR("Native NR companion API or mixed-v5 contract is incompatible");return false;}
+        if(!get){failureReason="HIP companion API is missing";return false;}
+        // Prefer the accepted research checkpoint, retaining the released
+        // companion as an explicit fallback for existing installations.
+        auto profile=NrExecution::OptimizedCheckpointId;
+        auto status=get(profile,NrSubmissionApi::Version,&api,sizeof(api));
+        if(status==Status::Unsupported){
+            profile=NrExecution::AcceptedMixedId;
+            status=get(profile,NrSubmissionApi::Version,&api,sizeof(api));
+        }
+        if(status!=Status::Ok){
+            failureReason="HIP companion execution profile is incompatible";
+            LOG_ERROR("Native NR companion execution profile is incompatible");return false;}
+        LOG_INFO("Native NR executor: {}",profile==NrExecution::OptimizedCheckpointId?
+            NrExecution::OptimizedCheckpointName:NrExecution::AcceptedMixedName);
         if(api.create(shape.device.Get(),shape.queue.Get(),&runtime)!=Status::Ok){
             failureReason="HIP runtime could not start on the selected device or queue";
             LOG_ERROR("Native NR HIP runtime could not start on the selected device/queue");return false;}

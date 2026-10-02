@@ -1,4 +1,7 @@
 param([Parameter(Mandatory=$true)][string]$ModelPath,
+      [string]$FrontendPath='',
+      [string]$CompanionPath='',
+      [ValidateRange(0.25,2.0)][float]$WorkingScale=1.0,
       [ValidateSet('static','pan','pan_reset','occlusion','occlusion_reset','resize')]
       [string]$Scenario='static',
       [ValidateSet(0,3,4)][uint32]$Backend=4,
@@ -11,8 +14,10 @@ $raw=Join-Path $out 'synthetic_160x90.rgba.f16'
 if(-not(Test-Path -LiteralPath $raw)){throw 'Run-Smoke.ps1 once to create the deterministic input'}
 $stage=Join-Path $out 'dx11-stage'
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
-Copy-Item -LiteralPath (Join-Path $root 'x64/Release/OptiScaler.dll') -Destination $stage -Force
-Copy-Item -LiteralPath (Join-Path $root 'build/hip-gfx1030/dlssnr_hip_scheduled_bridge.dll') -Destination $stage -Force
+$frontend=if($FrontendPath){(Resolve-Path -LiteralPath $FrontendPath).Path}else{Join-Path $root 'x64/Release/OptiScaler.dll'}
+$companion=if($CompanionPath){(Resolve-Path -LiteralPath $CompanionPath).Path}else{Join-Path $root 'build/hip-gfx1030/dlssnr_hip_scheduled_bridge.dll'}
+Copy-Item -LiteralPath $frontend -Destination $stage -Force
+Copy-Item -LiteralPath $companion -Destination $stage -Force
 $model=(Resolve-Path -LiteralPath $ModelPath).Path
 $stagedModel=Join-Path $stage 'model.nrwgt'
 if(Test-Path -LiteralPath $stagedModel){Remove-Item -LiteralPath $stagedModel -Force}
@@ -25,7 +30,7 @@ foreach($enabled in @($false,$true)){
       '[DlssNr]',"Enabled=$($enabled.ToString().ToLowerInvariant())","Backend=$Backend",
       "ModelPath=$stagedModel","RunBeforeSR=$((!$Post).ToString().ToLowerInvariant())",
       'Style=2','LocalTone=1','LocalStructure=1','SkinStructure=-1',
-      'AutoMask=false','Intensity=1','TemporalAccumulation=true','WorkingScale=1',
+      'AutoMask=false','Intensity=1','TemporalAccumulation=true',('WorkingScale='+$WorkingScale.ToString([Globalization.CultureInfo]::InvariantCulture)),
       'ApplyModel=true','[InitFlags]','AutoExposure=true',
       '[ProcessFilter]','ProcessExclusionList=optiscaler_dx11_evaluate_host.exe') |
         Set-Content -LiteralPath (Join-Path $stage 'OptiScaler.ini') -Encoding utf8

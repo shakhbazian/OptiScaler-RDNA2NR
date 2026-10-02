@@ -189,10 +189,20 @@ void RenderInput(Config* config)
 
         static const char* enlargeNames[] = { "Classic", "Matched residual", "Matched residual + DLSS",
                                               "Lighting + colour", "Lighting + colour + DLSS" };
-        int enlarge = (int) std::min(config->DlssNrTransfer.value_or_default(), 4u);
-
-        if (ImGui::Combo("Enlargement", &enlarge, enlargeNames, IM_ARRAYSIZE(enlargeNames)))
-            config->DlssNrTransfer = (uint32_t) enlarge;
+        if (HipMode(config))
+        {
+            static const char* hipNames[] = { "Classic", "Matched residual", "Lighting + colour" };
+            const auto transfer = config->DlssNrTransfer.value_or_default();
+            int enlarge = transfer >= 3 ? 2 : transfer != 0 ? 1 : 0;
+            if (ImGui::Combo("Enlargement", &enlarge, hipNames, IM_ARRAYSIZE(hipNames)))
+                config->DlssNrTransfer = enlarge == 2 ? 3u : static_cast<uint32_t>(enlarge);
+        }
+        else
+        {
+            int enlarge = (int) std::min(config->DlssNrTransfer.value_or_default(), 4u);
+            if (ImGui::Combo("Enlargement", &enlarge, enlargeNames, IM_ARRAYSIZE(enlargeNames)))
+                config->DlssNrTransfer = (uint32_t) enlarge;
+        }
 
         ImGui::EndDisabled();
 

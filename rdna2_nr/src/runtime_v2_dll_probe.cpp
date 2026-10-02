@@ -108,16 +108,16 @@ template<class Pixel>void UploadTexture(ID3D12Device*device,ID3D12CommandQueue*q
     commands.list->ResourceBarrier(1,&barrier);ExecuteAndWait(device,queue,commands.list.Get());}
 
 template<class Pixel>std::vector<Pixel>ReadTexture(ID3D12Device*device,ID3D12CommandQueue*queue,
-                                                   ID3D12Resource*texture){
+                                                   ID3D12Resource*texture,D3D12_RESOURCE_STATES entryState=D3D12_RESOURCE_STATE_UNORDERED_ACCESS){
     const auto desc=texture->GetDesc();D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
     UINT rows=0;UINT64 rowBytes=0,total=0;device->GetCopyableFootprints(&desc,0,1,0,&footprint,&rows,&rowBytes,&total);
     D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_READBACK;const auto buffer=BufferDesc(total);
     ComPtr<ID3D12Resource>readback;Hr(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&buffer,
         D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&readback)),"Create readback");
-    auto commands=OpenCommands(device);auto before=Barrier(texture,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
+    auto commands=OpenCommands(device);auto before=Barrier(texture,entryState,D3D12_RESOURCE_STATE_COPY_SOURCE);
     commands.list->ResourceBarrier(1,&before);D3D12_TEXTURE_COPY_LOCATION to{};to.pResource=readback.Get();to.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;to.PlacedFootprint=footprint;
     D3D12_TEXTURE_COPY_LOCATION from{};from.pResource=texture;from.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    commands.list->CopyTextureRegion(&to,0,0,0,&from,nullptr);auto after=Barrier(texture,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    commands.list->CopyTextureRegion(&to,0,0,0,&from,nullptr);auto after=Barrier(texture,D3D12_RESOURCE_STATE_COPY_SOURCE,entryState);
     commands.list->ResourceBarrier(1,&after);ExecuteAndWait(device,queue,commands.list.Get());
     const unsigned char*mapped=nullptr;D3D12_RANGE range{0,static_cast<SIZE_T>(total)};
     Hr(readback->Map(0,&range,reinterpret_cast<void**>(const_cast<unsigned char**>(&mapped))),"Map readback");

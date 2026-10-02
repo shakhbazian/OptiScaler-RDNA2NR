@@ -1,6 +1,6 @@
 # Compatibility and performance
 
-[Documentation](README.md) · [Troubleshooting](TROUBLESHOOTING.md)
+[Documentation](README.md) В· [Troubleshooting](TROUBLESHOOTING.md)
 
 ## Hardware
 
@@ -30,7 +30,7 @@ The frontend passes colour, depth, motion vectors and frame metadata when availa
 
 ## Resolution and memory
 
-There is no product cutoff at 1440p. Diagnostic hosts have exercised frames up to 3840×2160. This establishes the ability to process those dimensions, not acceptable 4K performance or VRAM headroom while a game is running.
+There is no product cutoff at 1440p. Diagnostic hosts have exercised frames up to 3840Г—2160. This establishes the ability to process those dimensions, not acceptable 4K performance or VRAM headroom while a game is running.
 
 Resolution changes can require a new resource/session preparation. During that transition, frames may temporarily use the raw path. Larger dimensions consume more scratch/history storage as well as more computation. Available memory must cover the game, NR, the upscaler and frame generation together.
 
@@ -38,7 +38,7 @@ Resolution changes can require a new resource/session preparation. During that t
 
 This is a research project. No playable frame-rate target is guaranteed. The original network remains computationally expensive even with the mixed INT8/FP16 executor.
 
-Pre-upscale NR usually costs less because it processes the internal render size. Post-upscale NR processes the upscaler output. A game's lower render resolution or a different SR preset can reduce the workload; HIP's own working-size setting remains 100%.
+Pre-upscale NR usually costs less because it processes the internal render size. Post-upscale NR processes the upscaler output. A game's lower render resolution or a different SR preset can reduce the workload; HIP also supports an independent 25–200% model working scale, with composition at the original frame size. See [settings](SETTINGS.md#model-resolution).
 
 Compare total frame time with NR disabled and enabled after preparation has completed, in the same scene with the same settings. Model-only timers do not include the entire integration, and a background game workload competes for the same GPU. Account for real rendered frames separately from generated frames.
 

@@ -87,16 +87,20 @@ void DebugClean(ID3D12Device* device){
     }
     Require(errors==0,"D3D12 debug clean");info->ClearStoredMessages();
 }
+float referenceScale=1.f;
 struct Reference {
     HMODULE module=nullptr;NrSubmissionApi::Api api{};void* runtime=nullptr;
-    ID3D12Device* device;ID3D12CommandQueue* queue;unsigned width,height;UINT64 epoch=0;
-    bool previousTemporal=true;
+    ID3D12Device* device;ID3D12CommandQueue* queue;unsigned width,height,nativeWidth,nativeHeight;UINT64 epoch=0;
+    bool previousTemporal=true;float previousJitterX=0,previousJitterY=0;
     struct Flight{Commands ingress,egress;CommonColorReference codec;NrV3::Token token{};bool live=false;};
     std::array<Flight,3> flights;
-    Reference(ID3D12Device* d,ID3D12CommandQueue* q,const std::filesystem::path& directory,unsigned w,unsigned h):device(d),queue(q),width(w),height(h){
+    Reference(ID3D12Device* d,ID3D12CommandQueue* q,const std::filesystem::path& directory,unsigned w,unsigned h):device(d),queue(q),width(unsigned(w*referenceScale+.5f)),height(unsigned(h*referenceScale+.5f)),nativeWidth(w),nativeHeight(h){
+        w=width;h=height;
         module=LoadLibraryExW((directory/L"dlssnr_hip_scheduled_bridge.dll").c_str(),nullptr,LOAD_WITH_ALTERED_SEARCH_PATH);
         Require(module,"reference DLL");auto get=Entry<NrSubmissionApi::GetApi>(module,"DlssNrHipBackendGetScheduledApiV2");
-        Require(get(NrExecution::AcceptedMixedId,2,&api,sizeof(api))==NrV3::Status::Ok,"reference API");
+        auto status=get(NrExecution::OptimizedCheckpointId,2,&api,sizeof(api));
+        if(status==NrV3::Status::Unsupported)status=get(NrExecution::AcceptedMixedId,2,&api,sizeof(api));
+        Require(status==NrV3::Status::Ok,"reference API");
         Require(api.create(d,q,&runtime)==NrV3::Status::Ok,"reference create");
         std::ifstream in(directory/L"dlssnr_gfx1030_v1.nrwgt",std::ios::binary|std::ios::ate);Require(bool(in),"reference weights");
         std::vector<unsigned char> bytes(static_cast<size_t>(in.tellg()));in.seekg(0);in.read(reinterpret_cast<char*>(bytes.data()),bytes.size());Require(bool(in),"reference weight read");
@@ -116,20 +120,29 @@ struct Reference {
         return snapshot;
     }
     void Apply(ID3D12Resource* color,ID3D12Resource* motion,unsigned mw,unsigned mh,bool reset,bool post,
-               NrV2::Controls controls={2,1,1,-1,0,1},bool temporal=true){
+               NrV2::Controls controls={2,1,1,-1,0,1},bool temporal=true,float jitterX=0,float jitterY=0,float motionScale=1){
         const auto snapshot=Poll();auto& f=flights[epoch%3];Require(!f.live,"reference slot");
         f.ingress=OpenCommands(device);f.egress=OpenCommands(device);
-        f.codec.Open(device,width,height,color->GetDesc().Format);
+        f.codec.Open(device,nativeWidth,nativeHeight,color->GetDesc().Format,width,height);
         f.codec.exposure=referenceExposure;
         f.codec.Encode(f.ingress.list.Get(),color,post,referenceHdr);
         NrV3::Input input{};input.prefix={sizeof(input),NrV3::Version};input.key={0x1030,epoch+2,++epoch};
         input.commands=f.ingress.list.Get();input.queue=queue;input.generation=snapshot.generation;
-        input.color={f.codec.proxy.Get(),{0,0,width,height,width,height},NrV2::Format::Rgba16Float,0};
-        input.motion={motion,{0,0,mw,mh,mw,mh},NrV2::Format::Rg16Float,0};input.controls=controls;
+        input.color={f.codec.ModelInput(f.ingress.list.Get()),{0,0,width,height,width,height},NrV2::Format::Rgba16Float,0};
+        ComPtr<ID3D12Resource> gathered;
+        if(mw>width||mh>height){
+            const auto source=ReadTexture<Rg16>(device,queue,motion,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            std::vector<Rg16> cells(std::size_t(width)*height);
+            for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x)
+                cells[std::size_t(y)*width+x]=source[std::size_t((2ull*y+1)*mh/(2ull*height))*mw+(2ull*x+1)*mw/(2ull*width)];
+            gathered=CreateTexture(device,TextureDesc(width,height,DXGI_FORMAT_R16G16_FLOAT),D3D12_RESOURCE_STATE_COPY_DEST);
+            UploadTexture(device,queue,gathered.Get(),cells);
+        }
+        input.motion={gathered?gathered.Get():motion,{0,0,gathered?width:mw,gathered?height:mh,gathered?width:mw,gathered?height:mh},NrV2::Format::Rg16Float,0};input.controls=controls;
         char temporalFlag[4]{};
         if((GetEnvironmentVariableA("DLSSNR_TEST_TEMPORAL_OFF",temporalFlag,sizeof(temporalFlag))==1&&temporalFlag[0]=='1')||!temporal)
             input.reserved=NrV3::DisableTemporalAccumulation;
-        input.motionParameters={1,1,mw,mh,0,0,0,0,NrV2::JitterMode::AddPreviousMinusCurrent,0};
+        input.motionParameters={motionScale,motionScale,mw,mh,previousJitterX,previousJitterY,jitterX,jitterY,NrV2::JitterMode::AddPreviousMinusCurrent,0};
         input.resetReasons=(reset||temporal!=previousTemporal)?NrV2::Explicit:0;
         NrV3::RecordResult receipt{};Require(api.recordInput(runtime,&input,sizeof(input),&receipt,sizeof(receipt))==NrV3::Status::Ok&&receipt.recorded,"reference record input");
         f.token=receipt.token;f.live=true;
@@ -143,7 +156,7 @@ struct Reference {
         Require(api.enqueue(runtime,&request,sizeof(request))==NrV3::Status::Ok,"reference enqueue");
         Require(api.armOutput(runtime,&request,sizeof(request))==NrV3::Status::Ok,"reference arm");
         Execute(queue,f.egress.list.Get());Require(api.notifyOutputSubmitted(runtime,&request,sizeof(request))==NrV3::Status::Ok,"reference output submitted");
-        previousTemporal=temporal;
+        ExecuteAndWait(device,queue,OpenCommands(device).list.Get());previousTemporal=temporal;previousJitterX=jitterX;previousJitterY=jitterY;
     }
     void Close(){Require(api.beginDrain(runtime)==NrV3::Status::Ok,"reference begin drain");
         const auto deadline=GetTickCount64()+10000;
@@ -173,6 +186,8 @@ int wmain(int argc,wchar_t** argv) try {
     Require(argc>=5&&argc<=8,"usage: optiscaler_dx12_evaluate_host OptiScaler.dll color.rgba.f16 width height [mode] [standard|write_immediate|batch|reuse|early_reset|scope|stream|paced_stream|recreate|queue_switch|resize|create1_alias|hdr|subrect_bypass|bundle_bypass|unknown_motion_state|device_reinit|controls|toggle|wrapper|wrapper_bypass|motion32_bypass] [frames]");
     const unsigned mode=argc>=6?std::stoul(argv[5]):0;
     const std::wstring scenario=argc>=7?argv[6]:L"standard";
+    char scaleText[32]{};
+    referenceScale=GetEnvironmentVariableA("NR_HOST_REFERENCE_SCALE",scaleText,sizeof(scaleText))?std::stof(scaleText):1.f;
     referenceHdr=scenario==L"hdr"||scenario==L"exposure";referenceApply=scenario!=L"apply_off";
     referenceTransfer=scenario==L"transfer_zero"?0.0f:1.0f;
     const unsigned frames=argc==8?std::stoul(argv[7]):4;
@@ -182,7 +197,7 @@ int wmain(int argc,wchar_t** argv) try {
     const unsigned outputScale=GetEnvironmentVariableW(L"NR_HOST_NATIVE_OUTPUT",nativeOutput,4)==1&&
                                nativeOutput[0]==L'1'?1u:2u;
     Require(frames>=3&&frames<=64,"bounded diagnostic frame count");
-    Require(scenario==L"present_queue"||scenario==L"rgba8"||scenario==L"rgba32"||scenario==L"r11"||scenario==L"standard"||scenario==L"write_immediate"||scenario==L"exposure"||scenario==L"apply_off"||scenario==L"transfer_zero"||scenario==L"batch"||scenario==L"reuse"||scenario==L"early_reset"||scenario==L"scope"||scenario==L"stream"||scenario==L"paced_stream"||scenario==L"recreate"||scenario==L"queue_switch"||scenario==L"resize"||scenario==L"drs"||scenario==L"create1_alias"||scenario==L"hdr"||scenario==L"subrect_bypass"||scenario==L"bundle_bypass"||scenario==L"unknown_motion_state"||scenario==L"device_reinit"||scenario==L"controls"||scenario==L"toggle"||scenario==L"temporal_toggle"||scenario==L"wrapper"||scenario==L"wrapper_bypass"||scenario==L"motion32_bypass","host scenario");
+    Require(scenario==L"pan_jitter"||scenario==L"scale_cycle"||scenario==L"scale_stream"||scenario==L"present_queue"||scenario==L"rgba8"||scenario==L"rgba32"||scenario==L"r11"||scenario==L"standard"||scenario==L"notifier"||scenario==L"write_immediate"||scenario==L"exposure"||scenario==L"apply_off"||scenario==L"transfer_zero"||scenario==L"batch"||scenario==L"reuse"||scenario==L"early_reset"||scenario==L"scope"||scenario==L"stream"||scenario==L"paced_stream"||scenario==L"recreate"||scenario==L"queue_switch"||scenario==L"resize"||scenario==L"drs"||scenario==L"create1_alias"||scenario==L"hdr"||scenario==L"subrect_bypass"||scenario==L"bundle_bypass"||scenario==L"unknown_motion_state"||scenario==L"device_reinit"||scenario==L"controls"||scenario==L"toggle"||scenario==L"temporal_toggle"||scenario==L"wrapper"||scenario==L"wrapper_bypass"||scenario==L"motion32_bypass","host scenario");
     Require(mode<=4,"host mode");
     Require(!(scenario==L"stream"&&frames>3&&mode>=3),"reference has three in-flight slots");
     Require(scenario!=L"recreate"||frames>=4,"recreate requires four frames");
@@ -322,12 +337,29 @@ int wmain(int argc,wchar_t** argv) try {
     ToggleFn setEnabled=nullptr;
     ToggleFn setControls=nullptr;
     ToggleFn setTemporal=nullptr;
+    using ScaleFn=void (*)(float);
+    ScaleFn setScale=nullptr;
+    if(scenario==L"scale_cycle"||scenario==L"scale_stream")
+        setScale=Entry<ScaleFn>(module,"DlssNrNativeTestSetWorkingScale");
+    wchar_t capturePath[32768]{};
+    GetEnvironmentVariableW(L"NR_HOST_OUTPUT_DIR",capturePath,32768);
+    if(capturePath[0])std::filesystem::create_directories(capturePath);
+    auto saveFrame=[&](unsigned frame,const std::vector<Rgba16>& result){
+        if(!capturePath[0])return;
+        std::ofstream file(std::filesystem::path(capturePath)/(std::to_wstring(frame)+L".rgba.f16"),std::ios::binary);
+        file.write(reinterpret_cast<const char*>(result.data()),result.size()*sizeof(Rgba16));
+        Require(bool(file),"capture output frame");
+    };
     if(scenario==L"toggle"&&(mode==1||mode==2))setEnabled=Entry<ToggleFn>(module,"DlssNrNativeTestSetEnabled");
     if(scenario==L"controls"&&(mode==1||mode==2))setControls=Entry<ToggleFn>(module,"DlssNrNativeTestSetControls");
     if(scenario==L"temporal_toggle"&&(mode==1||mode==2))setTemporal=Entry<ToggleFn>(module,"DlssNrNativeTestSetTemporal");
     if((mode==1||mode==2)&&scenario!=L"scope"&&scenario!=L"subrect_bypass"&&scenario!=L"bundle_bypass"&&scenario!=L"unknown_motion_state"&&scenario!=L"wrapper_bypass"&&scenario!=L"motion32_bypass"){
         params->Set(NVSDK_NGX_Parameter_Reset,1u);auto warmup=OpenCommands(device.Get());produce(warmup.list.Get());
         Require(evaluate(warmup.list.Get(),handle,params,nullptr)==NVSDK_NGX_Result_Success,"native warmup Evaluate");
+        if(scenario==L"notifier"){
+            ComPtr<ID3DDestructionNotifier> notifier;
+            Hr(warmup.list.As(&notifier),"warmup destruction notifier");
+        }
         ExecuteAndWait(device.Get(),queue.Get(),warmup.list.Get());
         for(unsigned i=0;i<6000&&!ready()&&!faults();++i)Sleep(5);
         Require(ready()&&!faults(),"native warmup ready");
@@ -347,7 +379,7 @@ int wmain(int argc,wchar_t** argv) try {
     std::vector<ComPtr<ID3D12Resource>> streamColors,streamOutputs;
     std::vector<Commands> streamCommands;
     std::array<Commands,3> pacedCommands;
-    const bool streaming=scenario==L"stream"||scenario==L"paced_stream";
+    const bool streaming=scenario==L"stream"||scenario==L"paced_stream"||scenario==L"scale_stream";
     std::uint64_t streamEvaluateUs=0,streamSubmitUs=0;
     if(streaming){
         streamColors.push_back(color);streamOutputs.push_back(output);
@@ -363,11 +395,43 @@ int wmain(int argc,wchar_t** argv) try {
         streamCommands.reserve(frames*2);
     }
     ComPtr<ID3D12Fence> pacingFence;
-    if(scenario==L"paced_stream")Hr(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,
+    if(scenario==L"paced_stream"||scenario==L"scale_stream")Hr(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,
         IID_PPV_ARGS(&pacingFence)),"host pacing fence");
     unsigned pacingWaits=0;
     const auto loopStart=std::chrono::steady_clock::now();
     for(unsigned frame=0;frame<frames;++frame){
+        if(setScale&&frame%3==0){
+            constexpr float scales[]={1.f,.5f,.75f,1.25f,2.f,.25f,1.f};
+            const float scale=scales[(frame/3)%7];setScale(scale);
+            if(scenario==L"scale_cycle"&&frame){
+                params->Set(NVSDK_NGX_Parameter_Reset,1u);
+                auto warmup=OpenCommands(device.Get());produce(warmup.list.Get());
+                Require(evaluate(warmup.list.Get(),handle,params,nullptr)==NVSDK_NGX_Result_Success,"scale warmup Evaluate");
+                ExecuteAndWait(device.Get(),queue.Get(),warmup.list.Get());
+                for(unsigned i=0;i<6000&&!ready()&&!faults();++i)Sleep(5);
+                Require(ready()&&!faults(),"scaled session ready");
+            }
+            std::printf("NativeScale phase=%u scale=%.2f ready=%u\n",frame/3,scale,ready());
+        }
+        float jitterX=0,jitterY=0,motionScale=1;
+        if(scenario==L"pan_jitter"){
+            char units[32]{};if(GetEnvironmentVariableA("NR_HOST_MOTION_UNITS",units,sizeof(units)))motionScale=std::stof(units);
+            jitterX=frame%2?.25f:-.25f;jitterY=frame%2?-.125f:.125f;
+            std::vector<Rgba16> moved(pixels.size());
+            Require(motionScale==1.f||motionScale==2.f,"motion unit test encoding");
+            std::vector<Rg16> vectors(pixels.size(),{static_cast<unsigned short>(frame?(motionScale==2.f?0xc000:0xc400):0),0});
+            for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x)
+                moved[std::size_t(y)*width+x]=pixels[std::size_t(y)*width+(x>frame*4?x-frame*4:0)];
+            auto sourceUpdate=OpenCommands(device.Get());
+            auto sourceBarrier=Barrier(scene.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+            sourceUpdate.list->ResourceBarrier(1,&sourceBarrier);ExecuteAndWait(device.Get(),queue.Get(),sourceUpdate.list.Get());
+            UploadColor(device.Get(),queue.Get(),scene.Get(),moved);
+            auto b=Barrier(motion.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+            auto update=OpenCommands(device.Get());update.list->ResourceBarrier(1,&b);ExecuteAndWait(device.Get(),queue.Get(),update.list.Get());
+            UploadTexture(device.Get(),queue.Get(),motion.Get(),vectors);
+            params->Set(NVSDK_NGX_Parameter_MV_Scale_X,motionScale);params->Set(NVSDK_NGX_Parameter_MV_Scale_Y,motionScale);
+            params->Set(NVSDK_NGX_Parameter_Jitter_Offset_X,jitterX);params->Set(NVSDK_NGX_Parameter_Jitter_Offset_Y,jitterY);
+        }
         if(setControls)setControls(frame);
         const bool temporal=scenario!=L"temporal_toggle"||frame<2||frame>=4;
         if(setTemporal)setTemporal(temporal?1u:0u);
@@ -380,11 +444,11 @@ int wmain(int argc,wchar_t** argv) try {
         auto* frameOutput=streaming?streamOutputs[frame].Get():output.Get();
         params->Set(NVSDK_NGX_Parameter_Color,frameColor);
         params->Set(NVSDK_NGX_Parameter_Output,frameOutput);
-        const bool resetFrame=frame==0||(scenario==L"toggle"&&frame==3)||
+        const bool resetFrame=frame==0||(scenario==L"scale_cycle"&&frame%3==0)||(scenario==L"toggle"&&frame==3)||
             ((scenario==L"recreate"||scenario==L"queue_switch")&&frame==frames/2);
         params->Set(NVSDK_NGX_Parameter_Reset,resetFrame?1u:0u);
         Commands commands;
-        if(scenario==L"paced_stream"&&pacedCommands[frame%3].list){
+        if((scenario==L"paced_stream"||scenario==L"scale_stream")&&pacedCommands[frame%3].list){
             commands=std::move(pacedCommands[frame%3]);
             Hr(commands.allocator->Reset(),"paced allocator");
             Hr(commands.list->Reset(commands.allocator.Get(),nullptr),"paced list");
@@ -426,7 +490,7 @@ int wmain(int argc,wchar_t** argv) try {
         if(mode==3){Execute(queue.Get(),commands.list.Get());
             producer=std::move(commands);
             reference->Apply(frameColor,motion.Get(),width,height,
-                resetFrame,false,controls,temporal);commands=OpenCommands(device.Get());}
+                resetFrame,false,controls,temporal,jitterX,jitterY,motionScale);commands=OpenCommands(device.Get());}
         if(scenario==L"batch"){
             producer=std::move(commands);Hr(producer.list->Close(),"batch producer close");
             commands=OpenCommands(device.Get());tail=OpenCommands(device.Get());
@@ -440,6 +504,10 @@ int wmain(int argc,wchar_t** argv) try {
         const auto evaluateStart=std::chrono::steady_clock::now();
         Require(evaluate(wrapper?wrapper.Get():commands.list.Get(),handle,params,nullptr)==NVSDK_NGX_Result_Success,
                 "NGX D3D12 Evaluate");
+        if(scenario==L"notifier"){
+            ComPtr<ID3DDestructionNotifier> notifier;
+            Hr(commands.list.As(&notifier),"destruction notifier after NR marker");
+        }
         if(immediateBuffer){
             ComPtr<ID3D12GraphicsCommandList2> list2;
             Hr(commands.list.As(&list2),"WriteBufferImmediate suffix list2");
@@ -475,8 +543,12 @@ int wmain(int argc,wchar_t** argv) try {
                 std::chrono::microseconds>(std::chrono::steady_clock::now()-submitStart).count());
         }
         else ExecuteAndWait(device.Get(),queue.Get(),commands.list.Get());
+        if(!streaming){
+            const auto elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-evaluateStart).count();
+            std::printf("NativeTiming frame=%u evaluate_submit_wait_ms=%.6f\n",frame,elapsed);
+        }
         if(mode==4)reference->Apply(frameOutput,motion.Get(),width,height,
-            resetFrame,true,controls,temporal);
+            resetFrame,true,controls,temporal,jitterX,jitterY,motionScale);
         if(streaming){
             if(producer.list)streamCommands.push_back(std::move(producer));
             if(pacingFence)pacedCommands[frame%3]=std::move(commands);
@@ -495,6 +567,7 @@ int wmain(int argc,wchar_t** argv) try {
         }
         std::printf("NativeFrame frame=%u sha256=%s\n",frame,
             Sha256(result.data(),result.size()*sizeof(Rgba16)).c_str());
+        saveFrame(frame,result);
         all.insert(all.end(),result.begin(),result.end());
         DebugClean(device.Get());
         if(scenario==L"recreate"&&frame+1==frames/2){
@@ -552,7 +625,8 @@ int wmain(int argc,wchar_t** argv) try {
                 (pixel.g&0x7c00)!=0x7c00&&(pixel.b&0x7c00)!=0x7c00,"finite stream output");
             std::printf("NativeFrame frame=%u sha256=%s\n",frame,
                 Sha256(result.data(),result.size()*sizeof(Rgba16)).c_str());
-            all.insert(all.end(),result.begin(),result.end());
+            saveFrame(frame,result);
+        all.insert(all.end(),result.begin(),result.end());
             DebugClean(device.Get());
         }
         std::printf("NativeStream queued=%u waits_during_submission=%u final_waits=1\n",frames,pacingWaits);
@@ -643,7 +717,7 @@ int wmain(int argc,wchar_t** argv) try {
     }
     if(mode==1||mode==2){
         const auto count=applied()-initiallyApplied;
-        const bool coverage=scenario==L"stream"&&frames>3
+        const bool coverage=(scenario==L"stream"||scenario==L"scale_stream")&&frames>3
             ?count>=3&&count<=frames
             :count==((scenario==L"scope"||scenario==L"subrect_bypass"||scenario==L"bundle_bypass"||scenario==L"unknown_motion_state"||scenario==L"wrapper_bypass"||scenario==L"motion32_bypass")?0u:
                 scenario==L"toggle"?frames-2:frames+(scenario==L"resize"?2u:scenario==L"drs"?4u:0u));

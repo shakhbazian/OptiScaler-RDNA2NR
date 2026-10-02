@@ -25,7 +25,7 @@ For D3D11, OptiScaler's existing w/Dx12 upscaler bridge reaches the same D3D12 N
 
 The converter restores the original network's tensors into a checked FP16 package. The runtime retains the network topology and control inputs. It does not use a separately trained compact replacement.
 
-The executor uses INT8 for selected matrix paths, with scaled quantized weights and activations, while sensitive 32-channel stages remain FP16. Other stages use their supported FP16/float arithmetic. Custom HIP kernels provide the execution path; rocBLAS is not a runtime dependency. The conversion package itself is FP16, so offline conversion and runtime quantization are distinct steps.
+The executor uses INT8 for selected matrix projections and feed-forward layers, including the 32-channel feed-forward stages. Activation scales are calibrated constants; selected projections fold them into the weight scales at load time. Integer dot products accumulate in INT32 before conversion, reducing repeated scale operations. Sensitive 32-channel QKV and attention remain FP16. Other stages use their supported FP16/float arithmetic. Fused kernels and shared workspaces reduce intermediate transfers and repeated packing. Custom HIP kernels provide the execution path; rocBLAS is not a runtime dependency. The conversion package itself is FP16, so offline conversion and runtime quantization are distinct steps.
 
 The Style, Intensity, Local structure, Local tone, Skin structure and Auto skin mask controls reach the original network. Transfer and Colour strength are later composition controls. Keeping the network and controls does not claim numerical identity with the original NVIDIA runtime.
 

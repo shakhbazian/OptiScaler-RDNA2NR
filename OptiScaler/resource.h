@@ -18,12 +18,15 @@
 #define STRINGIZE_(s) #s
 #define STRINGIZE(s) STRINGIZE_(s)
 
-#define VER_MAJOR_VERSION 10
-#define VER_MINOR_VERSION 0
-#define VER_HOTFIX_VERSION 0
-#define VER_BUILD_NUMBER 1
+#define VER_MAJOR_VERSION 0
+#define VER_MINOR_VERSION 8
+#define VER_HOTFIX_VERSION 91
+#define VER_BUILD_NUMBER 2
+#define VER_RDNA2NR_VERSION "r2-0.8.91"
 
-#define VER_DEV_RELEASE
+// Public releases use the project label below; upstream's dev label is retained
+// only as a build option for local experiments.
+// #define VER_DEV_RELEASE
 // #define VER_PRE_RELEASE
 
 #define VER_FILE_VERSION VER_MAJOR_VERSION, VER_MINOR_VERSION, VER_HOTFIX_VERSION, VER_BUILD_NUMBER
@@ -50,8 +53,8 @@
     STRINGIZE(VER_MAJOR_VERSION) "." STRINGIZE(VER_MINOR_VERSION) "." STRINGIZE(VER_HOTFIX_VERSION) "-pre" STRINGIZE(VER_BUILD_NUMBER) " (" VER_BUILD_COMMIT ") (" VER_BUILD_DATE ")"
 #else
 #define VER_PRODUCT_VERSION_STR                                                                                        \
-    STRINGIZE(VER_MAJOR_VERSION) "." STRINGIZE(VER_MINOR_VERSION) "." STRINGIZE(VER_HOTFIX_VERSION) "-final (" VER_BUILD_COMMIT ")"
+    VER_RDNA2NR_VERSION " (" VER_BUILD_COMMIT ")"
 #endif // VER_PRE_RELEASE
 
-#define VER_PRODUCT_NAME "OptiScaler v" VER_PRODUCT_VERSION_STR
+#define VER_PRODUCT_NAME "OptiScaler-RDNA2NR " VER_PRODUCT_VERSION_STR
 #endif // OPTISCALER_BUILD_METADATA

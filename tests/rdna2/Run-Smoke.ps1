@@ -1,7 +1,8 @@
 param([Parameter(Mandatory=$true)][string]$ModelPath,
       [string]$CompanionPath='',
+      [string]$FrontendPath='',
       [ValidatePattern('^[A-Za-z0-9_-]+$')][string]$Label='candidate',
-      [ValidateSet('standard','queue_switch','resize','drs','wrapper','early_reset','hdr',
+      [ValidateSet('standard','notifier','queue_switch','resize','drs','wrapper','early_reset','hdr',
                    'exposure','rgba8','rgba32','r11','apply_off','transfer_zero',
                    'recreate','batch','reuse','stream','paced_stream','subrect_bypass',
                    'bundle_bypass','unknown_motion_state','wrapper_bypass','motion32_bypass')]
@@ -9,6 +10,7 @@ param([Parameter(Mandatory=$true)][string]$ModelPath,
       [ValidateRange(3,12)][int]$Frames=4,
       [ValidateRange(64,3840)][int]$Width=160,
       [ValidateRange(64,2160)][int]$Height=90,
+      [ValidateRange(0.25,2.0)][float]$WorkingScale=1.0,
       [switch]$NativeOutput,
       [switch]$FunctionalOnly,
       [switch]$SkipBuild)
@@ -26,7 +28,7 @@ $out=Join-Path $root 'build/tests/rdna2'
 $stage=Join-Path $out 'stage'
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 $inputs=@{
-    'OptiScaler.dll'=(Join-Path $root 'x64/Release/OptiScaler.dll')
+    'OptiScaler.dll'=$(if($FrontendPath){(Resolve-Path -LiteralPath $FrontendPath).Path}else{Join-Path $root 'x64/Release/OptiScaler.dll'})
     'dlssnr_hip_scheduled_bridge.dll'=$companion
     'dlssnr_gfx1030_v1.nrwgt'=$model
 }
@@ -52,7 +54,7 @@ function Invoke-Mode([string]$name,[int]$mode,[bool]$before){
         "RunBeforeSR=$($before.ToString().ToLowerInvariant())",'Style=2','LocalTone=1',
         'LocalStructure=1','SkinStructure=-1','AutoMask=false','Intensity=1',
         "WhitePointSource=$(if($Scenario -eq 'exposure'){'1'}else{'0'})",
-        'TemporalAccumulation=true','WorkingScale=1',
+        'TemporalAccumulation=true',('WorkingScale='+$WorkingScale.ToString([Globalization.CultureInfo]::InvariantCulture)),
         "ApplyModel=$(($Scenario -ne 'apply_off').ToString().ToLowerInvariant())",
         "TransferStrength=$(if($Scenario -eq 'transfer_zero'){'0'}else{'1'})",
         '[Hotfix]','ColorResourceBarrier=64','OutputResourceBarrier=8',
@@ -69,6 +71,7 @@ function Invoke-Mode([string]$name,[int]$mode,[bool]$before){
     # The AMD driver supplies HIP. Keep the SDK out of the child process PATH.
     $start.Environment['PATH']="${env:SystemRoot}\System32;${env:SystemRoot}"
     if($NativeOutput){$start.Environment['NR_HOST_NATIVE_OUTPUT']='1'}
+    $start.Environment['NR_HOST_REFERENCE_SCALE']=$WorkingScale.ToString([Globalization.CultureInfo]::InvariantCulture)
     foreach($arg in @((Join-Path $stage 'OptiScaler.dll'),$raw,"$Width","$Height","$mode",$Scenario,"$Frames")){
         [void]$start.ArgumentList.Add($arg)
     }
@@ -92,10 +95,10 @@ $bypass=$Scenario -in @('subrect_bypass','bundle_bypass','unknown_motion_state',
                         'wrapper_bypass','motion32_bypass')
 $off=if($FunctionalOnly){$null}else{Invoke-Mode 'off' 0 $true}
 $pre=Invoke-Mode 'pre' 1 $true
-$preReference=if($FunctionalOnly -or $bypass){$null}else{Invoke-Mode 'pre-reference' 3 $true}
+$preReference=if($FunctionalOnly -or $bypass -or $WorkingScale -gt 1.0){$null}else{Invoke-Mode 'pre-reference' 3 $true}
 $post=Invoke-Mode 'post' 2 $false
-$postReference=if($FunctionalOnly -or $bypass){$null}else{Invoke-Mode 'post-reference' 4 $false}
-if($FunctionalOnly){
+$postReference=if($FunctionalOnly -or $bypass -or $WorkingScale -gt 1.0){$null}else{Invoke-Mode 'post-reference' 4 $false}
+if($FunctionalOnly -or $WorkingScale -gt 1.0){
     Write-Output "PASS $Scenario ${Width}x${Height} pre/post functional-only debug-clean"
     return
 }

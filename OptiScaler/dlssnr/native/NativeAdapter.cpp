@@ -9,6 +9,7 @@
 #include <Util.h>
 #include <resource_tracking/ResTrack_dx12.h>
 #include <dlssnr/HipFrameSettings.h>
+#include <dlssnr/WorkingResolution.h>
 #include <shared_mutex>
 #include <unordered_map>
 #include <chrono>
@@ -107,7 +108,13 @@ using QueryMethod=NativeHooks::Method<0,QueryFn>;
 void ObserveQuery(IUnknown* self,REFIID iid,void** result,HRESULT status)noexcept{
     if(FAILED(status)||!result||!*result||!enabled.load())return;
     try{auto side=Find(self);if(!side)return;
-        if(!KnownListInterface(iid)){std::lock_guard lock(side->mutex);
+        // Lifetime callbacks cannot record GPU commands. This sibling interface
+        // must not be rejected or registered as a command-list alias.
+        if(iid==__uuidof(ID3DDestructionNotifier))return;
+        if(!KnownListInterface(iid)){
+            wchar_t text[40]{};StringFromGUID2(iid,text,40);
+            LOG_DEBUG("Native NR unobserved command-list IID {}",wstring_to_string(text));
+            std::lock_guard lock(side->mutex);
             if(side->recording)side->recording->Reject("unobserved private command-list interface");return;}
         // A recognized IID can still expose a wrapper with different physical
         // methods. Validate coverage before trusting the new alias.
@@ -280,7 +287,9 @@ bool FrontendSessionReady(NVSDK_NGX_Parameter* params,bool before,
     // observed native device; Submit checks the actual queue before GPU work
     // and warms a replacement session if it changed. This also avoids comparing
     // a game's COM device wrapper against the recorder's native device pointer.
-    return SessionReadyFor(side->device.Get(),nullptr,static_cast<unsigned>(desc.Width),desc.Height,
+    const auto work=ModelResolution(static_cast<unsigned>(desc.Width),desc.Height,
+                                    Config::Instance()->DlssNrWorkingScale.value_or_default());
+    return SessionReadyFor(side->device.Get(),nullptr,work.width,work.height,
                            currentEvaluation->feature->cookie,before);
     }catch(...){return false;}
 }
@@ -290,7 +299,12 @@ bool PrepareOwned(std::uint64_t id,ID3D12Device* device,ID3D12CommandQueue* queu
         std::uint64_t cookie=0;
         {auto& registry=FeatureRegistry();std::lock_guard lock(registry.mutex);
             auto& feature=registry.items[id];if(!feature)feature=std::make_shared<Feature>();cookie=feature->cookie;}
-        return WarmSession(device,queue,width,height,cookie,before);
+        const auto& cfg=*Config::Instance();
+        if(cfg.DlssNrSpatialCompression.value_or_default())return false;
+        const auto work=ModelResolution(width,height,cfg.DlssNrWorkingScale.value_or_default());
+        if(!NrV2::SupportedLogicalExtent(work.width,work.height)||
+           !NrV2::SupportedGraphExtent(NrV2::AlignNetworkExtent(work.width),NrV2::AlignNetworkExtent(work.height)))return false;
+        return WarmSession(device,queue,work.width,work.height,cookie,before);
     }catch(...){return false;}
 }
 
@@ -431,6 +445,16 @@ const char* Mark(ID3D12GraphicsCommandList* list,NVSDK_NGX_Parameter* params,boo
         params->Get(NVSDK_NGX_Parameter_Jitter_Offset_X,&mv.currentJitterX);params->Get(NVSDK_NGX_Parameter_Jitter_Offset_Y,&mv.currentJitterY);
         mv.effectiveWidth=intent->motionWidth;mv.effectiveHeight=intent->motionHeight;mv.jitterMode=NrV2::JitterMode::AddPreviousMinusCurrent;
         unsigned reset=0;params->Get(NVSDK_NGX_Parameter_Reset,&reset);intent->reset=reset!=0;
+        if(warmOnly){
+            if(cfg.DlssNrSpatialCompression.value_or_default())return "HIP peripheral compression is not supported";
+            const auto work=ModelResolution(intent->width,intent->height,cfg.DlssNrWorkingScale.value_or_default());
+            if(!NrV2::SupportedLogicalExtent(work.width,work.height)||
+               !NrV2::SupportedGraphExtent(NrV2::AlignNetworkExtent(work.width),NrV2::AlignNetworkExtent(work.height)))
+                return "HIP working extent exceeds runtime limits";
+            // This marker only warms the session. Its game texture is never
+            // submitted as model input; the common frontend builds that later.
+            intent->width=work.width;intent->height=work.height;
+        }
         if(frontend&&frontend->admitting){frontend->game=side;frontend->intent=std::move(intent);return nullptr;}
         const auto cutStart=trace?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
         if(!r->Cut())return r->reason;
@@ -455,7 +479,10 @@ class ModelBackend final:public INrBackend {
 public:
     const char* Name()const noexcept override{return "NativeMixedModelPass";}
     bool Initialize(ID3D12Device* d)override{device=d;return d!=nullptr;}
-    bool Resize(const NrBackendSize& s)override{return s.format==DXGI_FORMAT_R16G16B16A16_FLOAT&&NrV2::SupportedLogicalExtent(s.width,s.height);}
+    bool Resize(const NrBackendSize& s)override{
+        return s.format==DXGI_FORMAT_R16G16B16A16_FLOAT&&NrV2::SupportedLogicalExtent(s.width,s.height)&&
+            NrV2::SupportedGraphExtent(NrV2::AlignNetworkExtent(s.width),NrV2::AlignNetworkExtent(s.height));
+    }
     void Shutdown()noexcept override{}
     NrBackendEvaluation Evaluate(const NrBackendFrame& frame)override{
         if(!FrontendActive()||!frame.input||!frame.output||frame.input==frame.output||
@@ -591,6 +618,9 @@ extern "C" __declspec(dllexport) void DlssNrNativeTestSetControls(unsigned prese
     cfg.DlssNrStyle=static_cast<unsigned>(v[0]);cfg.DlssNrLocalTone=v[1];
     cfg.DlssNrLocalStructure=v[2];cfg.DlssNrSkinStructure=v[3];
     cfg.DlssNrAutoMask=v[4]!=0;cfg.DlssNrIntensity=v[5];
+}
+extern "C" __declspec(dllexport) void DlssNrNativeTestSetWorkingScale(float scale){
+    Config::Instance()->DlssNrWorkingScale=scale;
 }
 extern "C" __declspec(dllexport) void DlssNrNativeTestSetTemporal(unsigned enabled){
     Config::Instance()->DlssNrTemporalAccumulation=enabled!=0;

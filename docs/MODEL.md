@@ -24,7 +24,7 @@ You must obtain and supply the source yourself under its applicable terms. This 
 
 The installer reads the DLL as a binary data container. It extracts the network tensors, decodes their FP8 E4M3 representation into FP16, restores the layouts and scalar controls required by the executor, and writes a checksummed `.nrwgt` weight package. The original DLL is not executed or copied into the game folder by the AMD installer.
 
-This keeps the original network. There is no student-network training, pruning or downloadable replacement model in this release. The stored package contains FP16 tensors; the HIP executor prepares selected weights for INT8 execution when loading it. Sensitive 32-channel stages remain FP16. See [architecture](ARCHITECTURE.md#network-and-arithmetic) for the execution split.
+This keeps the original network. There is no student-network training, pruning or downloadable replacement model in this release. The stored package contains FP16 tensors; the HIP executor prepares selected weights for INT8 execution when loading it. Sensitive 32-channel QKV and attention remain FP16; the feed-forward layers use calibrated INT8 paths. See [architecture](ARCHITECTURE.md#network-and-arithmetic) for the execution split.
 
 Conversion and package validation happen before game files are changed. A verified cache is reused, so installing into another game does not require converting the same source again. GPU preparation is separate and takes place when the game starts NR.
 

@@ -65,7 +65,7 @@ Status __cdecl Destroy(void** p){if(!p||!*p)return Status::InvalidArgument;auto*
 extern "C" __declspec(dllexport) NrV3::Status __cdecl
 DlssNrHipBackendGetScheduledApiV1(std::uint32_t profileId,std::uint32_t requested,
     NrScheduledApi::Api* table,std::uint32_t bytes){
-    if(profileId!=NrExecution::AcceptedMixedId||requested!=NrScheduledApi::Version)return NrV3::Status::Unsupported;
+    if(profileId!=NrExecution::CompiledProfileId||requested!=NrScheduledApi::Version)return NrV3::Status::Unsupported;
     if(!table||bytes<sizeof(*table))return NrV3::Status::InvalidSize;
     *table={{sizeof(*table),NrScheduledApi::Version},Create,Configure,RecordInput,InputSubmitted,
         Poll,Enqueue,RecordOutput,OutputSubmitted,Drop,Ack,Drain,Shutdown,Quarantine,Destroy};
@@ -75,7 +75,7 @@ DlssNrHipBackendGetScheduledApiV1(std::uint32_t profileId,std::uint32_t requeste
 extern "C" __declspec(dllexport) NrV3::Status __cdecl
 DlssNrHipBackendGetScheduledApiV2(std::uint32_t profileId,std::uint32_t requested,
     NrSubmissionApi::Api* table,std::uint32_t bytes){
-    if(profileId!=NrExecution::AcceptedMixedId||requested!=NrSubmissionApi::Version)return NrV3::Status::Unsupported;
+    if(profileId!=NrExecution::CompiledProfileId||requested!=NrSubmissionApi::Version)return NrV3::Status::Unsupported;
     if(!table||bytes<sizeof(*table))return NrV3::Status::InvalidSize;
     NrScheduledApi::Api base{};
     const auto s=DlssNrHipBackendGetScheduledApiV1(profileId,NrScheduledApi::Version,&base,sizeof(base));
