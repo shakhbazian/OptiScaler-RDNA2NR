@@ -1,6 +1,6 @@
 # Compatibility and performance
 
-[Documentation](README.md) В· [Troubleshooting](TROUBLESHOOTING.md)
+[Documentation](README.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
 ## Hardware
 
@@ -30,7 +30,7 @@ The frontend passes colour, depth, motion vectors and frame metadata when availa
 
 ## Resolution and memory
 
-There is no product cutoff at 1440p. Diagnostic hosts have exercised frames up to 3840Г—2160. This establishes the ability to process those dimensions, not acceptable 4K performance or VRAM headroom while a game is running.
+NR uses the input dimensions at the selected processing stage and the model resolution setting. Standalone diagnostic tests have processed frames up to 3840x2160 (4K). Processing time and VRAM usage increase with resolution; large frames can exhaust the memory available while a game is running.
 
 Resolution changes can require a new resource/session preparation. During that transition, frames may temporarily use the raw path. Larger dimensions consume more scratch/history storage as well as more computation. Available memory must cover the game, NR, the upscaler and frame generation together.
 

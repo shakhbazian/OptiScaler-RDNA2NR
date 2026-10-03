@@ -1,6 +1,6 @@
 # NR settings
 
-[Documentation](README.md) В· [Compatibility](COMPATIBILITY.md)
+[Documentation](README.md) · [Compatibility](COMPATIBILITY.md)
 
 Open OptiScaler with **Insert** and expand **DLSS Neural Rendering**. These settings describe the AMD HIP path; the NVIDIA path has additional capabilities.
 
@@ -68,10 +68,10 @@ These values are inputs to the original network, rather than post-processing sub
 | Control | Range / default | Use |
 | --- | --- | --- |
 | Style | Standard, Natural, Cinematic / Standard | Select the model's rendering style. |
-| Intensity | 0вЂ“2 / 1 | Adjust the overall model effect. |
-| Local structure | 0вЂ“2 / 1 | Adjust local detail and structure. |
-| Local tone | 0вЂ“2 / 1 | Adjust local lighting and tone. |
-| Skin structure | в€’1вЂ“2 / в€’1 | Adjust skin structure; в€’1 follows Local structure. |
+| Intensity | 0–2 / 1 | Adjust the overall model effect. |
+| Local structure | 0–2 / 1 | Adjust local detail and structure. |
+| Local tone | 0–2 / 1 | Adjust local lighting and tone. |
+| Skin structure | -1–2 / -1 | Adjust skin structure; -1 follows Local structure. |
 | Auto skin mask | On | Use the model's skin selection. |
 | Temporal accumulation | On | Use available motion/history across real input frames. |
 

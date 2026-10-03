@@ -1,6 +1,6 @@
 # Troubleshooting
 
-[Documentation](README.md) В· [Installation](INSTALLATION.md)
+[Documentation](README.md) · [Installation](INSTALLATION.md)
 
 ## Menu or upscaler missing
 

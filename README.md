@@ -4,7 +4,7 @@ DLSS Neural Rendering on Radeon, integrated into OptiScaler.
 
 This fork adds a HIP backend for RDNA2 to [wilsjo2's OptiScaler-DLSSNR](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass). It keeps OptiScaler's DLSS/FSR/XeSS routing, frame-generation features and ordinary NVIDIA NGX compatibility. NR can run before or after upscaling, with controls for lighting, detail and colour.
 
-**Research project:** NR is working in Cyberpunk 2077 on an RX 6900 XT. A user test reached approximately **45 FPS at 1440p**, with FSR in Performance mode and NR at **75% before upscaling**. This is a reported game result, rather than a controlled benchmark. DirectX 11 support has been checked in standalone tests.
+**Research project:** NR is working in Cyberpunk 2077 on an RX 6900 XT. A user test reached approximately **45 FPS at 1440p with XeFG frame generation**, FSR 3 in Performance mode and NR at **75% before upscaling**. This is a reported game result, rather than a controlled benchmark. DirectX 11 support has been checked in standalone tests.
 
 The original network is retained, with selected matrix operations in INT8 and the remaining paths in FP16. **You supply the original model DLL; the installer prepares its weights locally.**
 
@@ -48,7 +48,7 @@ For DirectX 11, choose an upscaler marked **w/Dx12**; for example, `Dx11Upscaler
 
 The NVIDIA NGX route remains available on supported NVIDIA hardware with a user-supplied runtime. AMD and NVIDIA do not have the same set of NR features. NR backend selection is independent of the selected upscaler and frame generator.
 
-NR shares GPU time and memory with the game, upscaling and frame generation. Running it before upscaling normally processes fewer pixels. There is no fixed 1440p cutoff, but larger frames can be slow or exceed available VRAM. See [compatibility and performance](docs/COMPATIBILITY.md).
+NR processes the image at the selected stage and model scale. Running it before upscaling normally processes fewer pixels. Higher resolutions increase processing time and VRAM usage; large frames can exhaust the memory available alongside the game, upscaling and frame generation. See [compatibility and performance](docs/COMPATIBILITY.md).
 
 ## Documentation
 
