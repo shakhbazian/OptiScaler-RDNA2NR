@@ -93,6 +93,8 @@ The optional `Build-OptiScaler.ps1 -NativeTestHooks` build adds source-test hook
 
 Use `Run-Smoke.ps1 -WorkingScale 0.75` for reduced-resolution codec parity, `-Scenario notifier` for destruction-notification compatibility, or `-WorkingScale 2 -FunctionalOnly` for supersampling admission. `Run-Dx11.ps1` also accepts `-WorkingScale`. Both accept explicit `-FrontendPath` and `-CompanionPath` for isolated builds.
 
-To keep large build artifacts outside the checkout, both build scripts accept `-OutputRoot`. Package these binaries with `package_release.ps1 -SkipBuild -FrontendPath <DLL> -HipBackendPath <DLL> -OutputRoot <directory> -PortablePythonHome <Python directory>`.
+To keep large build artifacts outside the checkout, both build scripts accept `-OutputRoot`. The frontend also accepts `-ObjectRoot` with `-OutputRoot` to reuse a compiler cache. Package these binaries with `package_release.ps1 -SkipBuild -FrontendPath <DLL> -HipBackendPath <DLL> -OutputRoot <directory> -PortablePythonHome <Python directory>`.
+
+The standard frontend build explicitly disables FG transition tracing and native test exports. The packager rejects trace binaries, diagnostic exports, enabled default watermarks and machine-specific FSR paths. See the [tool inventory](../tools/README.md) for build helpers and source-only tests.
 
 For performance work, compare paired, uninstrumented full-frame runs. Treat stage profiling as a diagnostic aid, because instrumentation can alter the measured workload.

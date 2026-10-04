@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "FSR3_Dx12_FG.h"
+#include "Fsr3FrameGenerationRequests.h"
+#include <framegen/FGTransitionTrace.h>
 
 #include "Config.h"
 #include "Util.h"
@@ -89,6 +91,61 @@ static Fsr3::FfxPresentCallbackFunc _presentCallback = nullptr;
 static Fsr3::FfxFrameGenerationDispatchFunc _fgCallback = nullptr;
 
 static std::mutex _newFrameMutex;
+static Fsr3FrameGenerationRequests _frameGenerationRequests;
+
+static bool CoalesceFrameGenerationRequests()
+{
+    // Limit the compatibility change to the game whose request sequence we traced.
+    return _stricmp(State::Instance().gameExe.c_str(), "Cyberpunk2077.exe") == 0;
+}
+
+static void ApplyFrameGenerationRequest(IFGFeature* fg, bool enabled)
+{
+    State::Instance().fsrfgInputActive = enabled;
+    if (enabled && !fg->IsActive() && Config::Instance()->FGEnabled.value_or_default())
+    {
+        if (!fg->IsPaused())
+        {
+            fg->Activate();
+            fg->ResetCounters();
+        }
+    }
+    else if (!enabled && fg->IsActive())
+    {
+        fg->Deactivate();
+        fg->ResetCounters();
+    }
+}
+
+static void ReceiveFrameGenerationRequest(IFGFeature* fg, bool enabled)
+{
+    if (CoalesceFrameGenerationRequests())
+        _frameGenerationRequests.Request(fg, enabled, [fg](bool value) { ApplyFrameGenerationRequest(fg, value); });
+    else
+        ApplyFrameGenerationRequest(fg, enabled);
+}
+
+void FSR3FG::CommitFrameGenerationRequests()
+{
+    auto& state = State::Instance();
+    auto fg = state.currentFG;
+    if (state.activeFgInput != FGInput::FSRFG30 || fg == nullptr || !CoalesceFrameGenerationRequests())
+        return;
+    if (fg->FrameGenerationContext() == nullptr)
+    {
+        _frameGenerationRequests.Reset();
+        return;
+    }
+
+    const auto result = _frameGenerationRequests.Present(fg, [fg](bool value) {
+        ApplyFrameGenerationRequest(fg, value);
+    });
+#ifdef NR_FG_TRANSITION_TRACE
+    if (result.disabled || result.cancelledDisables != 0)
+        LOG_INFO("FGCOMMIT frame={} disabled={} cancelled={} active={} inputEnabled={}",
+                 fg->FrameCount(), result.disabled, result.cancelledDisables, fg->IsActive(), state.fsrfgInputActive);
+#endif
+}
 
 static ID3D12Resource* _hudless[BUFFER_COUNT] = {};
 static ID3D12Resource* _interpolation[BUFFER_COUNT] = {};
@@ -547,6 +604,7 @@ hkffxFrameInterpolationContextCreate(FfxFrameInterpolationContext* context,
         State::Instance().currentFG->DestroyFGContext();
     }
 
+    _frameGenerationRequests.Reset();
     _fgConst = {};
 
     _fgConst.displayHeight = contextDescription->displaySize.height;
@@ -679,6 +737,7 @@ static Fsr3::FfxErrorCode hkffxFrameInterpolationContextDestroy(FfxFrameInterpol
 
     if (State::Instance().currentFG != nullptr && fgContext == context->data[0])
     {
+        _frameGenerationRequests.Reset();
         LOG_INFO("Destroying FG Context: {:X}", (size_t) State::Instance().currentFG);
         State::Instance().currentFG->DestroyFGContext();
     }
@@ -704,21 +763,12 @@ static Fsr3::FfxErrorCode hkffxFsr3ConfigureFrameGeneration(void* context, Fsr3:
     {
         LOG_DEBUG("frameGenerationEnabled: {} ", config->frameGenerationEnabled);
 
-        s.fsrfgInputActive = config->frameGenerationEnabled;
-
-        if (config->frameGenerationEnabled && !fg->IsActive() && Config::Instance()->FGEnabled.value_or_default())
-        {
-            if (!fg->IsPaused())
-            {
-                fg->Activate();
-                fg->ResetCounters();
-            }
-        }
-        else if (!config->frameGenerationEnabled && fg->IsActive())
-        {
-            fg->Deactivate();
-            fg->ResetCounters();
-        }
+#ifdef NR_FG_TRANSITION_TRACE
+        if (s.fsrfgInputActive != config->frameGenerationEnabled ||
+            fg->IsActive() != config->frameGenerationEnabled)
+            TraceFGTransition("fsr3-configure", fg, config->frameGenerationEnabled, _ReturnAddress(), context);
+#endif
+        ReceiveFrameGenerationRequest(fg, config->frameGenerationEnabled);
 
         UINT64 width = 0;
         UINT height = 0;
@@ -788,21 +838,20 @@ static Fsr3::FfxErrorCode hkffxSetFrameGenerationConfigToSwapchainDX12(Fsr3::Ffx
     {
         LOG_DEBUG("frameGenerationEnabled: {} ", config->frameGenerationEnabled);
 
-        s.fsrfgInputActive = config->frameGenerationEnabled;
-
-        if (config->frameGenerationEnabled && !fg->IsActive() && Config::Instance()->FGEnabled.value_or_default())
-        {
-            if (!fg->IsPaused())
-            {
-                fg->Activate();
-                fg->ResetCounters();
-            }
-        }
-        else if (!config->frameGenerationEnabled && fg->IsActive())
-        {
-            fg->Deactivate();
-            fg->ResetCounters();
-        }
+#ifdef NR_FG_TRANSITION_TRACE
+        if (s.fsrfgInputActive != config->frameGenerationEnabled ||
+            fg->IsActive() != config->frameGenerationEnabled)
+            TraceFGTransition("fsr3-swapchain-configure", fg, config->frameGenerationEnabled,
+                              _ReturnAddress(), config->swapChain);
+        if (config->frameGenerationEnabled != fg->IsActive() &&
+            (!config->frameGenerationEnabled || !fg->IsPaused()))
+            TraceFGRequestOrigin(fg, config->frameGenerationEnabled, config->allowAsyncWorkloads,
+                                 static_cast<uint32_t>(config->flags),
+                                 config->onlyPresentInterpolated, config->HUDLessColor.resource,
+                                 reinterpret_cast<uintptr_t>(config->frameGenerationCallback),
+                                 reinterpret_cast<uintptr_t>(config->presentCallback));
+#endif
+        ReceiveFrameGenerationRequest(fg, config->frameGenerationEnabled);
 
         UINT64 width = 0;
         UINT height = 0;

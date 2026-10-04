@@ -1,5 +1,5 @@
 # Installs the OptiScaler frontend and converts a user-provided NR DLL locally.
-# No vendor DLL is loaded or copied to the game directory.
+# The NVIDIA source is read as data; an optional FSR runtime is copied separately.
 [CmdletBinding()]
 param(
     [ValidateSet('Install','Verify','Uninstall')][string]$Mode = 'Install',
@@ -10,6 +10,8 @@ param(
     [string]$PythonPath,
     [string]$ModelRoot,
     [string]$ReleaseRoot,
+    [string]$Fsr4Int8Dll,
+    [switch]$ReplaceChangedFiles,
     [switch]$Gui
 )
 $ErrorActionPreference = 'Stop'
@@ -19,6 +21,7 @@ if ([string]::IsNullOrWhiteSpace($ReleaseRoot)) {
 $SourceHash = 'E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E'
 $PackageHash = 'A7E6EE38172A81E12D613FA9A2F57E32AA1944908E56CD2A33E1F6C94369E3CB'
 $PackageBytes = 291595458
+$Fsr4Int8Hash = 'C7720BC16BEDE334F59A1A32CD22EDBCBBB159685ED5240E61350A5FB0BC8A94'
 $ModelRelative = "1\$SourceHash\mixed-v5-gfx1030.nrwgt"
 $ManifestName = '.optiscaler-rdna2nr-install.json'
 $BackupName = '.optiscaler-rdna2nr-backup'
@@ -85,6 +88,18 @@ function Read-Manifest([string]$Game) {
     }
     return $record
 }
+function Get-ChangedInstallFiles([string]$Game, $Record) {
+    if (-not $Record) { return }
+    foreach ($item in $Record.files) {
+        if ($item.relative -eq 'OptiScaler.ini') { continue }
+        $path = Join-Path $Game $item.relative
+        $hash = if (Test-Path -LiteralPath $path -PathType Leaf) { Get-Hash $path } else { $null }
+        if ($hash -ne $item.sha256) {
+            $version = if ($hash) { (Get-Item -LiteralPath $path).VersionInfo.ProductVersion } else { $null }
+            [pscustomobject]@{ relative = $item.relative; sha256 = $hash; version = $version }
+        }
+    }
+}
 function Find-Python([string]$Explicit, [string]$Root) {
     if ($Explicit) {
         if (-not (Test-Path -LiteralPath $Explicit -PathType Leaf)) { throw "Python not found: $Explicit" }
@@ -147,42 +162,113 @@ function Get-InstallFiles([string]$Root, [string]$Proxy) {
     }
     return $result
 }
+function Resolve-Fsr4Int8([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "FSR 4 INT8 DLL not found: $Path" }
+    if ((Get-Hash $Path) -ne $Fsr4Int8Hash) {
+        throw 'Select the supported FSR 4.0.2c INT8 DLL. Its SHA-256 differs from the verified build.'
+    }
+    return (Resolve-Path -LiteralPath $Path).Path
+}
+function Get-IniValue([string]$Ini, [string]$Section, [string]$Key) {
+    if (-not (Test-Path -LiteralPath $Ini -PathType Leaf)) { return $null }
+    $inSection = $false
+    $values = @()
+    foreach ($line in [IO.File]::ReadAllLines($Ini, [Text.Encoding]::UTF8)) {
+        if ($line -match '^\s*\[([^]]+)\]\s*$') { $inSection = $Matches[1] -eq $Section }
+        elseif ($inSection -and $line -match ('^\s*' + [regex]::Escape($Key) + '\s*=(.*)$')) {
+            $values += $Matches[1].Trim()
+        }
+    }
+    if ($values.Count -gt 1) { throw "Duplicate INI setting: [$Section] $Key" }
+    if ($values.Count) { return $values[0] }
+    return $null
+}
+function Resolve-InstalledFsr4([string]$Game, [string]$Explicit) {
+    if (-not [string]::IsNullOrWhiteSpace($Explicit)) { return (Resolve-Fsr4Int8 $Explicit) }
+    $saved = Get-IniValue (Join-Path $Game 'OptiScaler.ini') 'Libraries' 'FfxDx12SRPath'
+    if ($saved -and $saved -ne 'auto') {
+        $path = if ([IO.Path]::IsPathRooted($saved)) { $saved } else { Join-Path $Game $saved }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "The configured FSR runtime is missing: $path. Select your FSR 4 DLL, or correct [Libraries] FfxDx12SRPath before updating."
+        }
+        # Import the supported external runtime from older test installations.
+        # Other custom libraries and their settings remain user-owned.
+        if ((Get-Hash $path) -eq $Fsr4Int8Hash) { return [IO.Path]::GetFullPath($path) }
+        return $null
+    }
+    $managed = Join-Path $Game 'OptiScaler/amd_fidelityfx_upscaler_dx12.dll'
+    if ((Test-Path -LiteralPath $managed -PathType Leaf) -and (Get-Hash $managed) -eq $Fsr4Int8Hash) {
+        return $managed
+    }
+    return $null
+}
+function Set-IniValues([string]$Ini, [object[]]$Settings) {
+    $lines = [Collections.Generic.List[string]]::new()
+    $lines.AddRange([string[]][IO.File]::ReadAllLines($Ini, [Text.Encoding]::UTF8))
+    # Update only named settings, retaining comments and unrelated user choices.
+    foreach ($setting in $Settings) {
+        if ($setting -is [string] -or $setting.Count -ne 3) { throw 'Invalid INI update tuple.' }
+        $section = $setting[0]; $key = $setting[1]; $value = $setting[2]
+        $inSection = $false; $insert = -1; $keyIndices = @()
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^\s*\[([^]]+)\]\s*$') {
+                if ($inSection) { $insert = $i }
+                $inSection = $Matches[1] -eq $section
+                if ($inSection) { $insert = $i + 1 }
+            } elseif ($inSection -and $lines[$i] -match ('^\s*' + [regex]::Escape($key) + '\s*=')) {
+                $keyIndices += $i
+            }
+        }
+        if ($keyIndices.Count -gt 1) { throw "Duplicate INI setting: [$section] $key" }
+        if ($keyIndices.Count -eq 1) { $lines[$keyIndices[0]] = "$key=$value" }
+        elseif ($insert -ge 0) { $lines.Insert($insert, "$key=$value") }
+        else { $lines.Add("`r`n[$section]"); $lines.Add("$key=$value") }
+    }
+    [IO.File]::WriteAllLines($Ini, $lines, [Text.UTF8Encoding]::new($true))
+}
 function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
-                         [string]$Root, [string]$Python, [string]$Models) {
+                         [string]$Root, [string]$Python, [string]$Models, [string]$Fsr4Dll = '',
+                         [bool]$AllowChangedFiles = $false) {
     $gameFull = [IO.Path]::GetFullPath($Game)
     if (-not (Test-Path -LiteralPath $gameFull -PathType Container)) { throw 'Game directory does not exist.' }
     if (-not @(Get-ChildItem -LiteralPath $gameFull -File -Filter '*.exe').Count) {
         throw 'Select the folder containing the game executable.'
     }
     $rootFull = [IO.Path]::GetFullPath($Root)
+    $selectFsr4 = -not [string]::IsNullOrWhiteSpace($Fsr4Dll)
+    $fsr4Path = Resolve-InstalledFsr4 $gameFull $Fsr4Dll
     $releaseVersion = Get-ReleaseVersion $rootFull
     $files = @(Get-InstallFiles $rootFull $Proxy)
+    if ($fsr4Path) {
+        ($files | Where-Object relative -eq 'OptiScaler/amd_fidelityfx_upscaler_dx12.dll').source = $fsr4Path
+    }
     $old = Read-Manifest $gameFull
     if ($old -and $old.proxyName -ne $Proxy) {
         throw "This game already uses $($old.proxyName). Uninstall before changing the proxy name."
     }
-    if ($old) {
-        foreach ($item in $old.files) {
-            $installed = Join-Path $gameFull $item.relative
-            if ($item.relative -eq 'OptiScaler.ini') { continue }
-            if (-not (Test-Path -LiteralPath $installed -PathType Leaf) -or
-                (Get-Hash $installed) -ne $item.sha256) {
-                throw "An installed file has changed; refusing to overwrite: $installed"
-            }
-        }
+    $changed = @(Get-ChangedInstallFiles $gameFull $old)
+    if ($changed.Count -and -not $AllowChangedFiles) {
+        $paths = ($changed | ForEach-Object { Join-Path $gameFull $_.relative }) -join "`n"
+        throw "Installed files differ from the previous installation:`n$paths`nUse the GUI to confirm replacement, or pass -ReplaceChangedFiles to retain copies and update."
     }
     $model = Prepare-Model $Dll $rootFull $Python $Models
     $installId = [guid]::NewGuid().ToString('N')
     $backupRoot = Join-Path $gameFull $BackupName
     $transaction = Join-Path $backupRoot "transaction-$installId"
     $baseline = Join-Path $backupRoot "original-$installId"
+    $changedRoot = Join-Path $backupRoot "changed-$installId"
     Assert-Within $gameFull $transaction
     Assert-Within $gameFull $baseline
+    Assert-Within $backupRoot $changedRoot
     $manifestPath = Join-Path $gameFull $ManifestName
     $receipt = @()
     $touched = @()
     $originals = @{}
     $oldEntries = @{}
+    $changedEntries = @{}
+    $retained = @()
+    foreach ($item in $changed) { $changedEntries[$item.relative] = $item }
     if ($old) { foreach ($item in $old.files) {
         $originals[$item.relative] = $item.backup
         $oldEntries[$item.relative] = $item
@@ -191,6 +277,26 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
         foreach ($file in $files) {
             $destination = Join-Path $gameFull $file.relative
             Assert-Within $gameFull $destination
+            if ($oldEntries.ContainsKey($file.relative) -and $file.relative -ne 'OptiScaler.ini') {
+                $expected = if ($changedEntries.ContainsKey($file.relative)) {
+                    $changedEntries[$file.relative].sha256
+                } else { $oldEntries[$file.relative].sha256 }
+                $actual = if (Test-Path -LiteralPath $destination -PathType Leaf) { Get-Hash $destination } else { $null }
+                if ($actual -ne $expected) { throw "File changed during update; close the game and retry: $destination" }
+            }
+            if ($changedEntries.ContainsKey($file.relative) -and $changedEntries[$file.relative].sha256) {
+                # Keep manual replacements separately from the original uninstall backup.
+                $saved = Join-Path $changedRoot $file.relative
+                Assert-Within $changedRoot $saved
+                New-Item -ItemType Directory -Path (Split-Path -Parent $saved) -Force | Out-Null
+                Copy-Item -LiteralPath $destination -Destination $saved
+                if ((Get-Hash $saved) -ne $changedEntries[$file.relative].sha256) {
+                    throw "Changed-file backup verification failed: $saved"
+                }
+                $retained += [pscustomobject]@{ relative = $file.relative;
+                    sha256 = $changedEntries[$file.relative].sha256;
+                    backup = $saved.Substring($gameFull.TrimEnd('\').Length).TrimStart('\') }
+            }
             if ($file.relative -eq 'OptiScaler.ini' -and (Test-Path -LiteralPath $destination)) {
                 # The INI belongs to the user, including on the first install.
                 $source = $destination
@@ -218,6 +324,35 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
             $touched += $file.relative
             New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
             if ($source -ne $destination) { Copy-Item -LiteralPath $source -Destination $destination -Force }
+            if ($file.relative -eq 'OptiScaler.ini') {
+                # Retire diagnostic settings used by private test builds on update.
+                $settings = @(
+                    @('FrameGen', 'DebugView', 'false'),
+                    @('FSRFG', 'EnableWatermark', 'false'),
+                    @('XeFG', 'DebugView', 'false'),
+                    @('FSR', 'DebugView', 'false'),
+                    @('FSR', 'Fsr4EnableWatermark', 'false'),
+                    @('DLSSNR', 'DebugView', '0'),
+                    @('Log', 'LogLevel', '2'),
+                    @('Log', 'LogToConsole', 'false'),
+                    @('Log', 'LogToDebug', 'false'),
+                    @('Log', 'LogToNGX', 'false'),
+                    @('Log', 'OpenConsole', 'false')
+                )
+                if ($fsr4Path) {
+                    $settings += ,@('Libraries', 'FfxDx12SRPath', 'auto')
+                }
+                if ($selectFsr4) {
+                    $settings += @(
+                        @('Upscalers', 'Dx12Upscaler', 'ffx'),
+                        @('Upscalers', 'Dx11Upscaler', 'ffx_12'),
+                        @('FSR', 'UpscalerIndex', '0'),
+                        @('FSR', 'Fsr4ForceModel', 'auto')
+                    )
+                }
+                Set-IniValues $destination $settings
+                $entry.sha256 = Get-Hash $destination
+            }
             if ((Get-Hash $destination) -ne $entry.sha256) { throw "Installed file verification failed: $destination" }
             $receipt += [pscustomobject]$entry
         }
@@ -225,6 +360,12 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
             releaseVersion = $releaseVersion;
             installId = $installId; proxyName = $Proxy; modelSha256 = $PackageHash;
             modelPath = $model; files = $receipt }
+        $retainedHistory = @()
+        if ($old -and $old.PSObject.Properties['retainedChangedFiles']) {
+            $retainedHistory += @($old.retainedChangedFiles)
+        }
+        $retainedHistory += $retained
+        if ($retainedHistory.Count) { $record.retainedChangedFiles = $retainedHistory }
         $pendingManifest = "$manifestPath.pending"
         [IO.File]::WriteAllText($pendingManifest, ($record | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
         Move-Item -LiteralPath $pendingManifest -Destination $manifestPath -Force
@@ -245,6 +386,8 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
     Write-Output "Installed and verified $($receipt.Count) files in $gameFull"
     if ($releaseVersion) { Write-Output "Release: $releaseVersion" }
     Write-Output "Proxy: $Proxy; model: $model"
+    if ($fsr4Path) { Write-Output "FSR 4 INT8 installed: $(Join-Path $gameFull 'OptiScaler/amd_fidelityfx_upscaler_dx12.dll')" }
+    if ($retained.Count) { Write-Output "Previous changed files retained in: $changedRoot" }
 }
 function Verify-Product([string]$Game) {
     $gameFull = [IO.Path]::GetFullPath($Game)
@@ -296,7 +439,7 @@ function Show-Installer {
     $form.Text = 'OptiScaler-RDNA2NR setup'
     $releaseVersion = Get-ReleaseVersion $ReleaseRoot
     if ($releaseVersion) { $form.Text += " - $releaseVersion" }
-    $form.Size = New-Object System.Drawing.Size(660,350)
+    $form.Size = New-Object System.Drawing.Size(660,420)
     $form.StartPosition = 'CenterScreen'
     $form.MinimumSize = $form.Size
     $labels = @('Game executable folder', 'Your original nvngx_dlssnr.dll', 'Proxy DLL name')
@@ -331,15 +474,26 @@ function Show-Installer {
         }
         $form.Controls.Add($box); $boxes += $box
     }
+    $fsrLabel = New-Object System.Windows.Forms.Label
+    $fsrLabel.Text = 'FSR 4.0.2c INT8 DLL (optional; copied into the game folder)'
+    $fsrLabel.SetBounds(20,230,610,22); $form.Controls.Add($fsrLabel)
+    $fsrBox = New-Object System.Windows.Forms.TextBox
+    $fsrBox.Text = $Fsr4Int8Dll; $fsrBox.SetBounds(20,253,535,25); $form.Controls.Add($fsrBox)
+    $fsrBrowse = New-Object System.Windows.Forms.Button
+    $fsrBrowse.Text = 'Browse'; $fsrBrowse.SetBounds(565,252,70,27); $fsrBrowse.Tag = $fsrBox
+    $fsrBrowse.Add_Click({ $dialog = New-Object System.Windows.Forms.OpenFileDialog;
+        $dialog.Filter = 'FSR 4 INT8 DLL|amd_fidelityfx_upscaler_dx12.dll|DLL files|*.dll';
+        if ($dialog.ShowDialog() -eq 'OK') { $this.Tag.Text = $dialog.FileName } })
+    $form.Controls.Add($fsrBrowse)
     $status = New-Object System.Windows.Forms.Label
     $status.Text = 'The source DLL stays where it is. Conversion runs locally.'
     $status.AutoEllipsis = $true
-    $status.SetBounds(20,234,610,25); $form.Controls.Add($status)
+    $status.SetBounds(20,304,610,25); $form.Controls.Add($status)
     $ui = [pscustomobject]@{ Game = $boxes[0]; Dll = $boxes[1]; Proxy = $boxes[2];
         Status = $status; Form = $form; Payload = $Payload; Python = $PythonPath;
-        Models = $ModelRoot; Release = $ReleaseRoot }
+        Models = $ModelRoot; Release = $ReleaseRoot; Fsr4 = $fsrBox }
     $install = New-Object System.Windows.Forms.Button
-    $install.Text = 'Install / update'; $install.SetBounds(20,266,130,30)
+    $install.Text = 'Install / update'; $install.SetBounds(20,336,130,30)
     $install.Tag = $ui
     $install.Add_Click({
         try {
@@ -353,21 +507,32 @@ function Show-Installer {
             if (-not (Test-Path -LiteralPath $game -PathType Container)) { throw "Game folder not found: $game" }
             if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) { throw "Source DLL not found: $dll" }
             $existing = @()
+            $changed = @(Get-ChangedInstallFiles $game (Read-Manifest $game))
             foreach ($relative in (@($proxy) + $context.Payload)) {
                 if (Test-Path -LiteralPath (Join-Path $game $relative) -PathType Leaf) {
                     $existing += $relative
                 }
             }
-            if ($existing.Count) {
+            if ($existing.Count -or $changed.Count) {
                 $message = "Existing game files will be backed up before replacement:`n" +
                     ($existing -join "`n") + "`n`nContinue?"
+                if ($changed.Count) {
+                    $selectedVersion = Get-ReleaseVersion $context.Release
+                    $message = "Selected build: $selectedVersion`n`nThese files differ from the previous installation:`n" +
+                        (($changed | ForEach-Object {
+                            if ($_.version) { "$($_.relative) ($($_.version))" }
+                            elseif (-not $_.sha256) { "$($_.relative) (missing)" }
+                            else { $_.relative }
+                        }) -join "`n") +
+                        "`n`nReplace them with this build? Current copies will be retained in the backup folder. Your INI settings will be preserved."
+                }
                 $answer = [System.Windows.Forms.MessageBox]::Show($message,
                     'OptiScaler-RDNA2NR', 'YesNo', 'Warning')
                 if ($answer -ne 'Yes') { return }
             }
             $context.Status.Text = 'Preparing model and installing...'; $context.Form.Refresh()
             $py = Find-Python $context.Python $context.Release
-            Install-Product $game $dll $proxy $context.Release $py (Resolve-ModelRoot $context.Models) | Out-Null
+            Install-Product $game $dll $proxy $context.Release $py (Resolve-ModelRoot $context.Models) $context.Fsr4.Text.Trim() ($changed.Count -gt 0) | Out-Null
             Verify-Product $game | Out-Null
             $context.Status.Text = 'Installation verified.'
             [System.Windows.Forms.MessageBox]::Show('Installation verified. Enable NR in the OptiScaler menu.','OptiScaler-RDNA2NR') | Out-Null
@@ -378,7 +543,7 @@ function Show-Installer {
     })
     $form.Controls.Add($install)
     $uninstall = New-Object System.Windows.Forms.Button
-    $uninstall.Text = 'Uninstall'; $uninstall.SetBounds(165,266,110,30)
+    $uninstall.Text = 'Uninstall'; $uninstall.SetBounds(165,336,110,30)
     $uninstall.Tag = $ui
     $uninstall.Add_Click({
         $context = $this.Tag
@@ -404,7 +569,7 @@ function Show-Installer {
 if ($Gui -or ($Mode -eq 'Install' -and (-not $GameDirectory -or -not $SourceDll))) {
     Show-Installer
 } elseif ($Mode -eq 'Install') {
-    Install-Product $GameDirectory $SourceDll $ProxyName $ReleaseRoot (Find-Python $PythonPath $ReleaseRoot) (Resolve-ModelRoot $ModelRoot)
+    Install-Product $GameDirectory $SourceDll $ProxyName $ReleaseRoot (Find-Python $PythonPath $ReleaseRoot) (Resolve-ModelRoot $ModelRoot) $Fsr4Int8Dll $ReplaceChangedFiles.IsPresent
     Verify-Product $GameDirectory
 } elseif ($Mode -eq 'Verify') {
     Verify-Product $GameDirectory

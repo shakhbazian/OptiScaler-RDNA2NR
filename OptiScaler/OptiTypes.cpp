@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "OptiTypes.h"
+#include <State.h>
 #include <misc/IdentifyGpu.h>
 #include <unordered_map>
 
@@ -37,6 +38,16 @@ std::string ApiUpscalerInputName(ApiUpscalerInput upscaler)
 std::string UpscalerDisplayName(Upscaler upscaler, API api)
 {
     bool fsr4Capable = IdentifyGpu::getPrimaryGpu().fsr4Support != FSR4Support::None;
+    // An external INT8 runtime can expose FSR 4 on cards outside AMD's native list.
+    // This names the available family; the runtime watermark confirms execution.
+    for (const auto* version : State::Instance().ffxUpscalerVersionNames)
+    {
+        if (version != nullptr && std::string_view(version).starts_with("4."))
+        {
+            fsr4Capable = true;
+            break;
+        }
+    }
 
     switch (upscaler)
     {

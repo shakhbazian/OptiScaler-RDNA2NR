@@ -22,7 +22,18 @@ Style=0
 ApplyModel=true
 ```
 
-A fresh configuration selects Standard, 75% model resolution and pre-upscale placement. NR remains disabled until enabled. FSR 3 is preferred for D3D12 and the D3D11/D3D12 bridge; the existing FSR fallback applies if it cannot initialize. XeFG is the default FG output when its libraries are available, with Upscaler as the source. Enable FG separately in the menu. Existing INI files are preserved by the installer.
+A fresh configuration enables NR with Standard, 75% model resolution and pre-upscale placement. For D3D12 and the D3D11/D3D12 bridge, the loaded runtime selects FSR 4 when available, otherwise FSR 3. An explicit provider selection is retained when saving settings. The existing FSR fallback applies if initialization fails. Frame generation defaults to **FSR 3.0 FG** input with **XeFG** output. Enable the game's native FSR frame generation and **Active** in OptiScaler's FG menu to use this route. Other games may need a different input; **OptiFG (Upscaler)** works without native FG. Save settings and restart after changing the FG source or output. Existing INI files are preserved by the installer.
+
+For FSR 4 INT8, use the [optional runtime setup](INSTALLATION.md#optional-fsr-4-int8-on-rdna2).
+**FSR 3.X/4** names the available upscaler family. Choose the provider version
+in its settings and use **Watermark** to confirm which implementation runs.
+
+### HUD handling
+
+XeFG can handle HUD without a separate HUDless input, though results vary by game.
+FSR3-FG may need **HUDFix**, under **Frame Generation (OptiFG)**. Cyberpunk's
+compatibility profile disables HUDFix because of known issues; the menu explains
+when it is unavailable. Keep that restriction in place when using XeFG.
 
 ## Backend and placement
 

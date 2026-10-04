@@ -1,5 +1,17 @@
 # Changelog
 
+## r3-0.8.91
+
+- Fix critical frame-generation instability in Cyberpunk 2077: native FSR FG input no longer repeatedly enables and disables the output backend. FSR FG input to XeFG output is now the default route.
+- Add optional FSR 4.0.2c INT8 DLL selection to the GUI installer. The runtime is copied into the game folder and retained on updates, without an external library path.
+- Prefer FSR 4 when the loaded runtime provides it, with FSR 3 as the fallback; saved provider choices are respected.
+- Enable NR by default with Standard, 75% model resolution and pre-upscale placement.
+- Installation clears diagnostic views and console logging.
+- Allow confirmed updates of manually replaced installation files, keeping backups and rollback support.
+- Consolidate installation into one launcher and clarify HUD handling in the FG menu and user guides.
+
+See the [release notes](docs/release-notes/r3-0.8.91.md).
+
 ## r2-0.8.91
 
 - Faster HIP matrix execution with calibrated static INT8, folded scales, longer INT32 accumulation, fused handoffs and attention workspace reuse. The network and controls are retained; 32-channel QKV and attention remain FP16.

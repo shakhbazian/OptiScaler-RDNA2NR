@@ -40,7 +40,15 @@ The current HIP executor does not depend on rocBLAS. A rocBLAS error points to a
 
 ## Installation conflicts
 
-The installer records file hashes and ownership. If an installed binary has changed since installation, update/uninstall refuses to overwrite it. Close the game, retain the manifest and backup folder, and identify the changed file before deciding which mod owns it. Do not delete the backups as a first troubleshooting step.
+The installer records file hashes and ownership. A manual DLL replacement can
+make these records differ from the current files. Close the game and run the GUI
+installer: it lists the changed files and asks whether to replace them with the
+selected build. Confirming retains current copies under
+`.optiscaler-rdna2nr-backup/changed-*` and keeps the original uninstall backups.
+The command-line equivalent is `-ReplaceChangedFiles`. Without this explicit
+choice, a changed-file update is refused. Uninstall also refuses changed binaries;
+update them first or restore the files recorded in the manifest. Keep the manifest
+and backup folder while resolving conflicts.
 
 An edited INI is intentionally preserved. Unsupported modes left in an old configuration can prevent HIP admission: restore one pass, ordinary pre/post placement and no separate-edit, finished-picture or frame-hold mode.
 

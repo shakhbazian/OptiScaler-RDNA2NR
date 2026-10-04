@@ -16,3 +16,29 @@ jobs:
       - uses: actions/checkout@v6
       - name: Check public links and excluded assets
         run: python3 tools/check_release_source.py
+      - name: Check FG requests and FSR provider selection
+        run: |
+          g++ -std=c++20 -pthread -Wall -Wextra -Werror tests/rdna2/frame_generation_contracts.cpp -o /tmp/nr-contracts
+          /tmp/nr-contracts
+
+  installer-checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check Windows installer transactions with data-only fixtures
+        shell: powershell
+        run: ./tests/rdna2/Installer.Tests.ps1
+      - name: Check watermark environment and FG contracts on Windows
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'C++ compiler installation not found.' }
+          & "$vs/Common7/Tools/Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          $exe = Join-Path $env:RUNNER_TEMP 'nr-contracts.exe'
+          $obj = Join-Path $env:RUNNER_TEMP 'nr-contracts.obj'
+          & cl.exe /nologo /std:c++20 /EHsc /W4 /WX /Od "/Fe:$exe" "/Fo:$obj" tests/rdna2/frame_generation_contracts.cpp
+          if ($LASTEXITCODE -ne 0) { throw 'Contract test compilation failed.' }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Contract tests failed.' }

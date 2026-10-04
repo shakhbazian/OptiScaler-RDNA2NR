@@ -357,9 +357,11 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="dlssnr\DlssNr_ModelParameters.h" />
     <ClInclude Include="framegen\ffx\FSRFG_Dx12.h" />
     <ClInclude Include="framegen\IFGFeature.h" />
+    <ClInclude Include="framegen\FGTransitionTrace.h" />
     <ClInclude Include="framegen\IFGFeature_Dx12.h" />
     <ClInclude Include="framegen\nvngx\Nvngx_FG.h" />
     <ClInclude Include="fsr4\FSR4ModelSelection.h" />
+    <ClInclude Include="fsr4\WatermarkEnvironment.h" />
     <ClInclude Include="hooks\D3D12_Hooks.h" />
     <ClInclude Include="hooks\DxgiFactory_Hooks.h" />
     <ClInclude Include="hooks\DxgiSwapchainSizing.h" />
@@ -655,7 +657,9 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="framegen\dlssg\MfgUnlock.cpp">
       <ExcludedFromBuild Condition="'$(OptiScalerRtx40Mfg)'!='true'">true</ExcludedFromBuild>
     </ClCompile>
-    <ClCompile Include="framegen\ffx\FSRFG_Dx12.cpp" />
+    <ClCompile Include="framegen\ffx\FSRFG_Dx12.cpp">
+      <PreprocessorDefinitions Condition="'$(NrFgTransitionTrace)'=='true'">NR_FG_TRANSITION_TRACE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Include="framegen\IFGFeature.cpp" />
     <ClCompile Include="framegen\IFGFeature_Dx12.cpp" />
     <ClCompile Include="framegen\nvngx\Nvngx_FG.cpp" />
@@ -745,9 +749,13 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="with_dx12\with_dx12.cpp" />
     <ClCompile Include="with_dx12\dx11_with_dx12_sc.cpp" />
     <ClCompile Include="wrapped\wrapped_factory.cpp" />
-    <ClCompile Include="inputs\FG\FSR3_Dx12_FG.cpp" />
+    <ClCompile Include="inputs\FG\FSR3_Dx12_FG.cpp">
+      <PreprocessorDefinitions Condition="'$(NrFgTransitionTrace)'=='true'">NR_FG_TRANSITION_TRACE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Include="inputs\FG\Streamline_Inputs_Dx12.cpp" />
-    <ClCompile Include="framegen\xefg\XeFG_Dx12.cpp" />
+    <ClCompile Include="framegen\xefg\XeFG_Dx12.cpp">
+      <PreprocessorDefinitions Condition="'$(NrFgTransitionTrace)'=='true'">NR_FG_TRANSITION_TRACE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Include="hooks\Streamline_Hooks.cpp" />
     <ClCompile Include="hudfix\Hudfix_Dx11.cpp" />
     <ClCompile Include="hudfix\Hudfix_Dx12.cpp" />
@@ -782,7 +790,9 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="inputs\FfxApiExe_Dx12.cpp" />
-    <ClCompile Include="inputs\FG\FfxApi_Dx12_FG.cpp" />
+    <ClCompile Include="inputs\FG\FfxApi_Dx12_FG.cpp">
+      <PreprocessorDefinitions Condition="'$(NrFgTransitionTrace)'=='true'">NR_FG_TRANSITION_TRACE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Include="inputs\FfxApi_Vk.cpp" />
     <ClCompile Include="inputs\FG\Upscaler_Inputs_Dx12.cpp" />
     <ClCompile Include="inputs\XeSS_Base.cpp" />

@@ -28,14 +28,18 @@ Allow space for the extracted release, about 278 MiB for the converted model, an
 1. Download the installer ZIP from [Releases](https://github.com/shakhbazian/OptiScaler-RDNA2NR/releases). Close the game and extract the **complete archive** into a separate folder.
 2. Run **`Install-RDNA2NR.cmd`**. Select the folder containing the game's actual executable and your original `nvngx_dlssnr.dll`. Keep `dxgi.dll` unless the game's installation guidance calls for another proxy. Click **Install / update**.
 3. Start the game and enable a supported in-game upscaler. **FSR is a valid input on AMD.**
-4. Press **Insert**, open **DLSS Neural Rendering**, and enable NR. Select **Auto** for the backend. The starting configuration is **Standard**, **75% Model resolution**, **before upscaling**, with one pass and **Apply model** enabled.
+4. Press **Insert** and open **DLSS Neural Rendering**. NR is enabled in a fresh configuration, with **Auto** backend, **Standard**, **75% Model resolution**, **before upscaling**, one pass and **Apply model** enabled.
 5. Wait for model preparation. **AMD HIP (gfx1030)** identifies the backend; **RDNA2 NR active** with a growing frame count confirms that frames are being processed. Toggle NR to compare the image.
 
 To lower the network's working resolution while keeping the frame size, adjust **Model resolution**. At 50%, a 1080p NR input runs at 540p. See [settings](docs/SETTINGS.md#model-resolution) for placement and composition choices.
 
-The installer converts and verifies the model before replacing game files. It keeps an existing `OptiScaler.ini`, backs up replaced files, and reuses a verified model cache on subsequent installations. A fresh configuration selects **FSR 3** when available and **XeFG** when its libraries are present. Enable frame generation in the OptiScaler menu when you want to use it. NR stays disabled until you enable it.
+The installer converts and verifies the model before replacing game files. It keeps an existing `OptiScaler.ini`, backs up replaced files, and reuses a verified model cache on subsequent installations. A fresh configuration selects **FSR 4** when the loaded runtime offers it, otherwise **FSR 3**, and **FSR 3.0 FG → XeFG** for frame generation. To use this FG route, enable the game's native FSR frame generation and **Active** in OptiScaler's FG menu. Games with a different FG input need the matching source; **OptiFG (Upscaler)** is available for games without native FG. Save settings and restart after changing the FG source or output.
 
 For DirectX 11, choose an upscaler marked **w/Dx12**; for example, `Dx11Upscaler=ffx_12` in the `[Upscalers]` section. See [installation](docs/INSTALLATION.md) for updates, removal and command-line use, or [troubleshooting](docs/TROUBLESHOOTING.md) if NR is inactive.
+
+**FSR 4 INT8 on RDNA2:** an optional FSR 4.0.2c INT8 runtime can be used with
+the HIP NR backend. Select its DLL in the installer; it is copied into the game
+folder and retained on updates. See [setup and verification](docs/INSTALLATION.md#optional-fsr-4-int8-on-rdna2).
 
 ## Supported NR paths
 

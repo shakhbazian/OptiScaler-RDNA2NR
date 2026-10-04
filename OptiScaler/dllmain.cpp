@@ -27,6 +27,7 @@
 #include "inputs/FG/FSR3_Dx12_FG.h"
 
 #include <fsr4/FSR4ModelSelection.h>
+#include <fsr4/WatermarkEnvironment.h>
 
 #include <hooks/Dxgi_Hooks.h>
 #include <hooks/D3D11_Hooks.h>
@@ -2049,16 +2050,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         {
             if (Config::Instance()->Fsr4EnableWatermark.value())
             {
-                _wputenv_s(L"MLSR-WATERMARK", L"1");
-                SetEnvironmentVariableW(L"MLSR-WATERMARK", L"1");
+                SetFidelityFxWatermark(L"MLSR-WATERMARK", true);
 
                 if (!Config::Instance()->FpsOverlayPosition.has_value())
                     Config::Instance()->FpsOverlayPosition.set_volatile_value(FpsOverlayPos_TopRight);
             }
             else
             {
-                _wputenv_s(L"MLSR-WATERMARK", L"0");
-                SetEnvironmentVariableW(L"MLSR-WATERMARK", L"0");
+                SetFidelityFxWatermark(L"MLSR-WATERMARK", false);
             }
         }
 
@@ -2066,16 +2065,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         {
             if (Config::Instance()->FSRFGEnableWatermark.value())
             {
-                _wputenv_s(L"MLFI-WATERMARK", L"1");
-                SetEnvironmentVariableW(L"MLFI-WATERMARK", L"1");
+                SetFidelityFxWatermark(L"MLFI-WATERMARK", true);
 
                 if (!Config::Instance()->FpsOverlayPosition.has_value())
                     Config::Instance()->FpsOverlayPosition.set_volatile_value(FpsOverlayPos_TopRight);
             }
             else
             {
-                _wputenv_s(L"MLFI-WATERMARK", L"0");
-                SetEnvironmentVariableW(L"MLFI-WATERMARK", L"0");
+                SetFidelityFxWatermark(L"MLFI-WATERMARK", false);
             }
         }
 

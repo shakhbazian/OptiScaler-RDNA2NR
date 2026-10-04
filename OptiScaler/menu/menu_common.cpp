@@ -3350,7 +3350,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     inputOptions = {
         { FGInput::NoFG, "None" },
         { FGInput::Upscaler, "OptiFG (Upscaler)",
-            "Upscaler must be enabled\n\nCan be used with any FG Output, but might be imperfect with some\nTo prevent UI glitching, HUDfix required" },
+            "Upscaler must be enabled\n\nXeFG can handle HUD without HUDFix\nFSR3-FG may need HUDFix, subject to game compatibility" },
         { FGInput::DLSSG, "DLSSG via Streamline",
             "Can be used with any FG Output\n\nRequires enabling DLSS-FG in game settings\nSupports HUDless out of the box\n\nLimited to games that use Streamline" },
         { FGInput::NvngxFG, "DLSSG via Nvngx",
@@ -4506,6 +4506,15 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             const bool hudfixTrackingSupported =
                 !Config::Instance()->FGDisableHUDFix.value_or_default() &&
                 (state.swapchainInteropApi == SwapchainInteropApi::None || dx11HudfixTracking);
+
+            if (!hudfixTrackingSupported)
+            {
+                ImGui::TextDisabled(config->FGDisableHUDFix.value_or_default()
+                                        ? "HUDFix disabled for this game"
+                                        : "HUDFix unavailable with this graphics path");
+                ShowHelpMarker("HUD capture is disabled by compatibility settings or the graphics path. "
+                               "XeFG may work without HUDFix.");
+            }
 
             if (hudfixTrackingSupported)
             {

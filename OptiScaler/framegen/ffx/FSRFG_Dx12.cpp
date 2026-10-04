@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "FSRFG_Dx12.h"
+#include <framegen/FGTransitionTrace.h>
 
 #include <State.h>
 
@@ -1210,6 +1211,10 @@ void FSRFG_Dx12::CreateContext(ID3D12Device* device, FG_Constants& fgConstants)
 
 void FSRFG_Dx12::Activate()
 {
+#ifdef NR_FG_TRANSITION_TRACE
+    if (!IsActive())
+        TraceFGTransition("fsrfg-activate", this, true, _ReturnAddress(), _fgContext);
+#endif
     if (_fgContext != nullptr && _swapChain != nullptr && !_isActive)
     {
         ffxConfigureDescFrameGeneration fgConfig = {};
@@ -1234,6 +1239,10 @@ void FSRFG_Dx12::Activate()
 
 void FSRFG_Dx12::Deactivate()
 {
+#ifdef NR_FG_TRANSITION_TRACE
+    if (IsActive())
+        TraceFGTransition("fsrfg-deactivate", this, false, _ReturnAddress(), _fgContext);
+#endif
     if (_isActive)
     {
         auto fIndex = GetIndex();

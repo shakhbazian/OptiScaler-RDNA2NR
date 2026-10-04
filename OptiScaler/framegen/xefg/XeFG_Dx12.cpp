@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "XeFG_Dx12.h"
+#include <framegen/FGTransitionTrace.h>
 
 #include <hudfix/Hudfix_Dx11.h>
 #include <hudfix/Hudfix_Dx12.h>
@@ -642,6 +643,10 @@ void XeFG_Dx12::CreateContext(ID3D12Device* device, FG_Constants& fgConstants)
 
 void XeFG_Dx12::Activate()
 {
+#ifdef NR_FG_TRANSITION_TRACE
+    if (!IsActive())
+        TraceFGTransition("xefg-activate", this, true, _ReturnAddress(), _swapChainContext);
+#endif
     LOG_DEBUG("");
 
     auto currentFeature = State::Instance().currentFeature;
@@ -667,6 +672,10 @@ void XeFG_Dx12::Activate()
 
 void XeFG_Dx12::Deactivate()
 {
+#ifdef NR_FG_TRANSITION_TRACE
+    if (IsActive())
+        TraceFGTransition("xefg-deactivate", this, false, _ReturnAddress(), _swapChainContext);
+#endif
     LOG_DEBUG("");
 
     if (_isActive)

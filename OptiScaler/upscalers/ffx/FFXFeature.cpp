@@ -1,6 +1,7 @@
 #include <pch.h>
 #include <Config.h>
 #include "FFXFeature.h"
+#include "FfxProviderSelection.h"
 #include <proxies/FfxApi_Proxy.h>
 
 static void FfxLogCallback(uint32_t type, const wchar_t* message)
@@ -35,19 +36,18 @@ void FFXFeature::QueryVersionsDx12(ID3D12Device* device)
     versionQuery.versionNames = State::Instance().ffxUpscalerVersionNames.data();
     FfxApiProxy::D3D12_Query(nullptr, &versionQuery.header);
 
-    // Version indices vary with the adapter and runtime; prefer FSR 3 by name.
+    for (size_t i = 0; i < State::Instance().ffxUpscalerVersionNames.size(); ++i)
+    {
+        const auto* name = State::Instance().ffxUpscalerVersionNames[i];
+        LOG_INFO("FSR upscaler option {}: {}", i, name != nullptr ? name : "unknown");
+    }
+
+    // Prefer FSR 4 when the loaded runtime offers it. Keep explicit user choices.
     auto& index = Config::Instance()->FfxUpscalerIndex;
     if (!index.has_value())
     {
         const auto& names = State::Instance().ffxUpscalerVersionNames;
-        for (size_t i = 0; i < names.size(); ++i)
-        {
-            if (names[i] != nullptr && std::string_view(names[i]).starts_with("3."))
-            {
-                index.set_volatile_value(static_cast<int>(i));
-                break;
-            }
-        }
+        index.set_volatile_value(PreferredFsrProvider(names));
     }
 }
 

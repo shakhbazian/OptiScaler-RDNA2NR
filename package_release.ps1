@@ -32,7 +32,6 @@ $files=[ordered]@{
     'Changelog.md'='Changelog.md'
     'VERSION.txt'='VERSION.txt'
     'LICENSE'='LICENSE'
-    'INSTALL-DLSSNR.md'='INSTALL-DLSSNR.md'
     'docs/README.md'='docs/README.md'
     'docs/INSTALLATION.md'='docs/INSTALLATION.md'
     'docs/SETTINGS.md'='docs/SETTINGS.md'
@@ -42,11 +41,12 @@ $files=[ordered]@{
     'docs/TROUBLESHOOTING.md'='docs/TROUBLESHOOTING.md'
     'docs/ARCHITECTURE.md'='docs/ARCHITECTURE.md'
     'docs/BUILDING.md'='docs/BUILDING.md'
+    'tools/README.md'='tools/README.md'
     'docs/CREDITS.md'='docs/CREDITS.md'
     'docs/upstream/README.md'='docs/upstream/README.md'
     'docs/release-notes/r1-0.8.91.md'='docs/release-notes/r1-0.8.91.md'
     'docs/release-notes/r2-0.8.91.md'='docs/release-notes/r2-0.8.91.md'
-    'setup_windows.bat'='setup_windows.bat'
+    'docs/release-notes/r3-0.8.91.md'='docs/release-notes/r3-0.8.91.md'
     'Install-RDNA2NR.ps1'='Install-RDNA2NR.ps1'
     'Install-RDNA2NR.cmd'='Install-RDNA2NR.cmd'
     'OptiScaler/libxess.dll'='external/xess/bin/libxess.dll'
@@ -89,10 +89,22 @@ if($LASTEXITCODE -ne 0 -or $frontendText -match 'DlssNrNativeTest|TestArm' -or
    $hipText -match 'TestArm|DlssNrHipBackendGetPinnedApiV1'){
     throw 'Production export audit failed.'
 }
+# Trace builds can have production exports, so inspect their diagnostic markers too.
+$binaryText=[Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($frontendBinary))
+if($binaryText -match 'FGTRACE|FGORIGIN|FGCOMMIT'){
+    throw 'A private FG trace build cannot be packaged as a release.'
+}
 $ini=Get-Content -LiteralPath (Join-Path $root $files['OptiScaler.ini']) -Raw
+$nrSection='(?ms)^\[DlssNr\]\r?\n(?<settings>.*?)(?=^\[|\z)'
+$nrDefaults=[regex]::Match($ini,$nrSection).Groups['settings'].Value
+$otherDefaults=[regex]::Replace($ini,$nrSection,'')
 if($ini -notmatch '(?mi)^TargetProcessName=auto\s*$' -or
-   $ini -match '(?mi)^Enabled=true\s*$' -or $ini -match '(?mi)^ModelPath=\S+' -or
-   $ini -match '(?mi)^(FinishedPicture|DeferredDLSS|AdaMfgUnlock)=true\s*$'){
+   $nrDefaults -notmatch '(?mi)^Enabled=true\s*$' -or
+   $otherDefaults -match '(?mi)^Enabled=true\s*$' -or $ini -match '(?mi)^ModelPath=\S+' -or
+   $ini -notmatch '(?mi)^FGInput=FSRFG30\s*$' -or $ini -notmatch '(?mi)^FGOutput=XeFG\s*$' -or
+   $ini -match '(?mi)^(FinishedPicture|DeferredDLSS|AdaMfgUnlock|Fsr4EnableWatermark|EnableWatermark)=true\s*$' -or
+   $ini -match '(?mi)^DebugView=(true|[1-9][0-9]*)\s*$' -or
+   $ini -notmatch '(?mi)^FfxDx12SRPath=auto\s*$'){
     throw 'Default INI enables an experimental or machine-specific setting.'
 }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
@@ -116,11 +128,6 @@ $ini=$ini -replace '(?m)^; Experimental built-in RTX 40 MFG unlock[^\r\n]*\r?\n'
 $ini=$ini -replace '(?m)^AdaMfgUnlock=[^\r\n]*\r?\n',''
 $ini=$ini -replace '(?ms)^; Frame timing fix for the extra frames.*?^AdaFlipMeteringPatch=[^\r\n]*\r?\n',''
 [IO.File]::WriteAllText((Join-Path $stage 'OptiScaler.ini'),$ini,[Text.UTF8Encoding]::new($false))
-@('Run Install-RDNA2NR.cmd to select a game folder and your own original nvngx_dlssnr.dll.',
-  'The installer parses the DLL as data and creates the private model package locally.',
-  'No NVIDIA model or converted weights are included.',
-  'The gfx1030 HIP backend requires a compatible AMD driver runtime.') |
-    Set-Content -LiteralPath (Join-Path $stage 'MODEL-SETUP.txt') -Encoding utf8
 $unexpected=@(Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object {
     $_.Name -match '(?i)\.nrwgt$|^nvngx_dlssnr\.dll$|^amdhip64_6\.dll$|^amd_comgr_2\.dll$'
 })

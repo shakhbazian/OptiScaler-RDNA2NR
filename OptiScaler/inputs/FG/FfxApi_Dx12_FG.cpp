@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "FfxApi_Dx12_FG.h"
+#include <framegen/FGTransitionTrace.h>
 
 #include <Util.h>
 #include <Config.h>
@@ -516,6 +517,12 @@ ffxReturnCode_t ffxConfigure_Dx12FG(ffxContext* context, ffxConfigureDescHeader*
         LOG_DEBUG("FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION frameID: {}, enabled: {}, fIndex: {} ", cDesc->frameID,
                   cDesc->frameGenerationEnabled, fIndex);
 
+#ifdef NR_FG_TRANSITION_TRACE
+        if (s.fsrfgInputActive != cDesc->frameGenerationEnabled ||
+            fg->IsActive() != cDesc->frameGenerationEnabled)
+            TraceFGTransition("ffx-api-configure", fg, cDesc->frameGenerationEnabled,
+                              _ReturnAddress(), context);
+#endif
         s.fsrfgInputActive = cDesc->frameGenerationEnabled;
 
         if (cDesc->frameGenerationEnabled && !fg->IsActive() && Config::Instance()->FGEnabled.value_or_default())

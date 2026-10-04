@@ -1,4 +1,4 @@
-param([switch]$NativeTestHooks, [string]$OutputRoot)
+param([switch]$NativeTestHooks, [string]$OutputRoot, [string]$ObjectRoot)
 $ErrorActionPreference = 'Stop'
 $source = (Resolve-Path -LiteralPath (Split-Path $PSScriptRoot -Parent)).Path
 . "$PSScriptRoot/Enter-Toolchain.ps1" -PlatformToolset v145 -MsvcToolsVersion 14.44
@@ -21,15 +21,17 @@ $argsList = @((Join-Path $source 'OptiScaler/OptiScaler.vcxproj'), '/t:Build',
     '/p:Configuration=Release', '/p:Platform=x64', ('/p:SolutionDir=' + $source.Replace('\','/') + '/'),
     '/p:PlatformToolset=v145', "/p:VCToolsVersion=$env:VCTOOLSVERSION", '/p:OptiScalerRtx40Mfg=false',
     '/p:PostBuildEventUseInBuild=false', '/p:PreBuildEventUseInBuild=false',
+    '/p:NrFgTransitionTrace=false', '/p:NrNativeTestHooks=false', '/p:CL_MPCount=2',
     '/p:TrackFileAccess=false', '/m:2', '/nr:false', '/nologo', '/v:minimal')
 if ($OutputRoot) {
     $outputBase = [IO.Path]::GetFullPath($OutputRoot)
     $binaryDir = Join-Path $outputBase 'bin'
-    $objectDir = Join-Path $outputBase 'obj'
+    $objectDir = if ($ObjectRoot) { [IO.Path]::GetFullPath($ObjectRoot) } else { Join-Path $outputBase 'obj' }
     New-Item -ItemType Directory -Force -Path $binaryDir,$objectDir | Out-Null
     $argsList += ('/p:OutDir=' + $binaryDir.Replace('\','/') + '/'),
                  ('/p:IntDir=' + $objectDir.Replace('\','/') + '/')
 }
+elseif ($ObjectRoot) { throw 'ObjectRoot requires OutputRoot.' }
 # Isolate compilation from upstream's legacy unquoted post-build file operations.
 if($NativeTestHooks){$argsList += '/p:NrNativeTestHooks=true'}
 # Packaging is tested separately through its manifest-based package_release.ps1.

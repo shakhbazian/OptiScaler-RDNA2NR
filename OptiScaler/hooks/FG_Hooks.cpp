@@ -1149,6 +1149,9 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
 
     auto willPresent = (Flags & DXGI_PRESENT_TEST) == 0;
 
+    if (willPresent && This == state.currentFGSwapchain)
+        FSR3FG::CommitFrameGenerationRequests();
+
     if (willPresent)
     {
         // Let's try Dx11 like approach on Dx12

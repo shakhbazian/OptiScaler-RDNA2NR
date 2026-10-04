@@ -8,7 +8,7 @@ The frontend retains the ordinary NVIDIA NGX route. This is separate from the AM
 
 1. Close the game and back up an existing OptiScaler installation and configuration.
 2. Place this release's `OptiScaler.dll`, `OptiScaler.ini` and complete `OptiScaler/` backend folder beside the actual rendering executable. Preserve an existing INI if needed, then review its NR settings.
-3. Use the inherited `setup_windows.bat` to select a proxy filename, or rename the frontend manually according to the game's OptiScaler setup. Handle existing loaders before replacing their files.
+3. Rename the frontend to a proxy filename such as `dxgi.dll`, according to the game's OptiScaler setup. Handle existing loaders before replacing their files.
 4. Place your compatible `nvngx_dlssnr.dll` beside the game executable/proxy. This route loads the NVIDIA runtime; it does not use the HIP converter or `.nrwgt` cache.
 5. Enable a supported in-game upscaler, open the overlay, choose Auto or NVIDIA, and enable NR. Start with one pass and ordinary pre/post-upscale placement.
 

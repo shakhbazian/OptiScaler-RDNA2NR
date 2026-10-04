@@ -8,5 +8,6 @@ namespace FSR3FG
 void HookFSR3FGExeInputs();
 void HookFSR3FGInputs();
 void ffxPresentCallback();
+void CommitFrameGenerationRequests();
 void SetUpscalerInputs(ID3D12GraphicsCommandList* InCmdList, NVSDK_NGX_Parameter* InParameters, IFeature_Dx12* feature);
 }; // namespace FSR3FG

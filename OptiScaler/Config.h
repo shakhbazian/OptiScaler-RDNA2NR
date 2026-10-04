@@ -242,7 +242,7 @@ class Config
     CustomOptional<bool> LogToNGX { false };
     CustomOptional<bool> OpenConsole { false };
     CustomOptional<bool> DebugWait { false }; // not in ini
-    CustomOptional<int> LogLevel { 0 };
+    CustomOptional<int> LogLevel { 2 };
     CustomOptional<std::wstring> LogFileName { L"OptiScaler.log" };
     CustomOptional<bool> LogSingleFile { true };
     CustomOptional<bool> LogAsync { false };
@@ -254,8 +254,8 @@ class Config
     CustomOptional<bool> CreateHeaps { true };
 
     // DLSS Neural Rendering
-    // NR is opt-in. Placement defaults to the upscaler output.
-    CustomOptional<bool> DlssNrEnabled { false };
+    // NR starts enabled with one pre-upscale pass at 75% working resolution.
+    CustomOptional<bool> DlssNrEnabled { true };
     // Legacy numeric selector while older INI files are migrated to named backends.
     CustomOptional<uint32_t> DlssNrBackend { 4 }; // Auto: gfx1030 HIP or original NVIDIA NGX.
     // User-created NRWGT package. Empty selects the per-user RDNA2-NR model cache.
@@ -559,7 +559,8 @@ class Config
 
     // FSR
     CustomOptional<bool> FsrDebugView { false };
-    CustomOptional<int> FfxUpscalerIndex { 0 };
+    // Provider 0 is a real user selection, not an alias for the automatic policy.
+    CustomOptional<int, SoftDefault> FfxUpscalerIndex { 0 };
     CustomOptional<int> FfxFGIndex { 0 };
     CustomOptional<bool> FsrUseMaskForTransparency { true };
     CustomOptional<bool> FsrNonLinearColorSpace { false };
@@ -628,7 +629,7 @@ class Config
     CustomOptional<int> LateAsiPluginsDelay { 30 };
 
     // Frame Generation
-    CustomOptional<FGInput> FGInput { FGInput::Upscaler };
+    CustomOptional<FGInput> FGInput { FGInput::FSRFG30 };
     CustomOptional<FGOutput> FGOutput { FGOutput::XeFG };
     CustomOptional<FGNvngxReplacement> FGNvngxReplacement { FGNvngxReplacement::Nukems };
     CustomOptional<bool> FGDrawUIOverFG { false };

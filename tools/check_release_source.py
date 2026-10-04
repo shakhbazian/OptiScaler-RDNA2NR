@@ -45,7 +45,7 @@ def heading_ids(path):
 
 def main():
     tracked = subprocess.check_output(
-        ["git", "ls-files", "-z"], cwd=ROOT
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT
     ).decode("utf-8").split("\0")
     errors = []
     version = (ROOT / "VERSION.txt").read_text(encoding="utf-8-sig").strip()
@@ -67,7 +67,7 @@ def main():
                 if encoding_error == "Invalid UTF-8 encoding":
                     invalid_utf8.add(ROOT / path)
 
-    guides = [ROOT / "README.md", ROOT / "INSTALL-DLSSNR.md", ROOT / "Changelog.md"]
+    guides = [ROOT / "README.md", ROOT / "Changelog.md", ROOT / "tools/README.md"]
     guides += sorted((ROOT / "docs").glob("*.md"))
     guides += sorted((ROOT / "docs/release-notes").glob("*.md"))
     guides += [ROOT / "docs/upstream/README.md"]
