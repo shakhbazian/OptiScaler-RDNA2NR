@@ -21,8 +21,8 @@
 #define VER_MAJOR_VERSION 0
 #define VER_MINOR_VERSION 8
 #define VER_HOTFIX_VERSION 91
-#define VER_BUILD_NUMBER 3
-#define VER_RDNA2NR_VERSION "r3-0.8.91"
+#define VER_BUILD_NUMBER 4
+#define VER_RDNA2NR_VERSION "r3-0.8.91_fix-1"
 
 // Public releases use the project label below; upstream's dev label is retained
 // only as a build option for local experiments.

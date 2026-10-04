@@ -1,5 +1,12 @@
 # Changelog
 
+## r3-0.8.91_fix-1
+
+- Enable the frame-generation Active switch by default for the FSR 3.0 FG input → XeFG output route.
+- Apply the enabled default to existing automatic configurations during installation; preserve explicitly saved on/off choices.
+
+See the [hotfix notes](docs/release-notes/r3-0.8.91_fix-1.md).
+
 ## r3-0.8.91
 
 - Fix critical frame-generation instability in Cyberpunk 2077: native FSR FG input no longer repeatedly enables and disables the output backend. FSR FG input to XeFG output is now the default route.

@@ -52,6 +52,13 @@ def main():
     resource = (ROOT / "OptiScaler/resource.h").read_text(encoding="utf-8-sig")
     if f'#define VER_RDNA2NR_VERSION "{version}"' not in resource:
         errors.append("VERSION.txt and the frontend release label differ.")
+    config = (ROOT / "OptiScaler/Config.h").read_text(encoding="utf-8-sig")
+    ini = (ROOT / "OptiScaler.ini").read_text(encoding="utf-8-sig")
+    fg = re.search(r"(?ms)^\[FrameGen\]\r?\n(.*?)(?=^\[|\Z)", ini)
+    if not re.search(r"CustomOptional<bool>\s+FGEnabled\s*\{\s*true\s*\}", config):
+        errors.append("The frontend must enable FG by default.")
+    if not fg or not re.search(r"(?mi)^Enabled=true\s*$", fg.group(1)):
+        errors.append("The shipped FrameGen section must enable FG.")
     forbidden_names = {"nvngx_dlssnr.dll", "amdhip64_6.dll", "amdhip64_7.dll", "amd_comgr_2.dll", "amd_comgr_3.dll"}
     invalid_utf8 = set()
     for name in filter(None, tracked):

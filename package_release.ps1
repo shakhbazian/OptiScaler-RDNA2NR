@@ -47,6 +47,7 @@ $files=[ordered]@{
     'docs/release-notes/r1-0.8.91.md'='docs/release-notes/r1-0.8.91.md'
     'docs/release-notes/r2-0.8.91.md'='docs/release-notes/r2-0.8.91.md'
     'docs/release-notes/r3-0.8.91.md'='docs/release-notes/r3-0.8.91.md'
+    'docs/release-notes/r3-0.8.91_fix-1.md'='docs/release-notes/r3-0.8.91_fix-1.md'
     'Install-RDNA2NR.ps1'='Install-RDNA2NR.ps1'
     'Install-RDNA2NR.cmd'='Install-RDNA2NR.cmd'
     'OptiScaler/libxess.dll'='external/xess/bin/libxess.dll'
@@ -97,11 +98,14 @@ if($binaryText -match 'FGTRACE|FGORIGIN|FGCOMMIT'){
 $ini=Get-Content -LiteralPath (Join-Path $root $files['OptiScaler.ini']) -Raw
 $nrSection='(?ms)^\[DlssNr\]\r?\n(?<settings>.*?)(?=^\[|\z)'
 $nrDefaults=[regex]::Match($ini,$nrSection).Groups['settings'].Value
-$otherDefaults=[regex]::Replace($ini,$nrSection,'')
+$fgSection='(?ms)^\[FrameGen\]\r?\n(?<settings>.*?)(?=^\[|\z)'
+$fgDefaults=[regex]::Match($ini,$fgSection).Groups['settings'].Value
+$otherDefaults=[regex]::Replace([regex]::Replace($ini,$nrSection,''),$fgSection,'')
 if($ini -notmatch '(?mi)^TargetProcessName=auto\s*$' -or
    $nrDefaults -notmatch '(?mi)^Enabled=true\s*$' -or
+   $fgDefaults -notmatch '(?mi)^Enabled=true\s*$' -or
    $otherDefaults -match '(?mi)^Enabled=true\s*$' -or $ini -match '(?mi)^ModelPath=\S+' -or
-   $ini -notmatch '(?mi)^FGInput=FSRFG30\s*$' -or $ini -notmatch '(?mi)^FGOutput=XeFG\s*$' -or
+   $fgDefaults -notmatch '(?mi)^FGInput=FSRFG30\s*$' -or $fgDefaults -notmatch '(?mi)^FGOutput=XeFG\s*$' -or
    $ini -match '(?mi)^(FinishedPicture|DeferredDLSS|AdaMfgUnlock|Fsr4EnableWatermark|EnableWatermark)=true\s*$' -or
    $ini -match '(?mi)^DebugView=(true|[1-9][0-9]*)\s*$' -or
    $ini -notmatch '(?mi)^FfxDx12SRPath=auto\s*$'){

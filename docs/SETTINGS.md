@@ -22,7 +22,7 @@ Style=0
 ApplyModel=true
 ```
 
-A fresh configuration enables NR with Standard, 75% model resolution and pre-upscale placement. For D3D12 and the D3D11/D3D12 bridge, the loaded runtime selects FSR 4 when available, otherwise FSR 3. An explicit provider selection is retained when saving settings. The existing FSR fallback applies if initialization fails. Frame generation defaults to **FSR 3.0 FG** input with **XeFG** output. Enable the game's native FSR frame generation and **Active** in OptiScaler's FG menu to use this route. Other games may need a different input; **OptiFG (Upscaler)** works without native FG. Save settings and restart after changing the FG source or output. Existing INI files are preserved by the installer.
+A fresh configuration enables NR with Standard, 75% model resolution and pre-upscale placement. For D3D12 and the D3D11/D3D12 bridge, the loaded runtime selects FSR 4 when available, otherwise FSR 3. An explicit provider selection is retained when saving settings. The existing FSR fallback applies if initialization fails. Frame generation defaults to **FSR 3.0 FG** input with **XeFG** output and **Active** enabled. Enable the game's native FSR frame generation to use this route. A saved explicit **Active** off setting is preserved on updates; enable it once if desired. Other games may need a different input; **OptiFG (Upscaler)** works without native FG. Save settings and restart after changing the FG source or output. Existing INI files are preserved by the installer.
 
 For FSR 4 INT8, use the [optional runtime setup](INSTALLATION.md#optional-fsr-4-int8-on-rdna2).
 **FSR 3.X/4** names the available upscaler family. Choose the provider version

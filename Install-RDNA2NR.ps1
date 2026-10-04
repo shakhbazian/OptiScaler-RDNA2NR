@@ -339,6 +339,11 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
                     @('Log', 'LogToNGX', 'false'),
                     @('Log', 'OpenConsole', 'false')
                 )
+                # Upgrade the old automatic default without overriding a saved off switch.
+                $fgEnabled = Get-IniValue $destination 'FrameGen' 'Enabled'
+                if ([string]::IsNullOrWhiteSpace($fgEnabled) -or $fgEnabled -eq 'auto') {
+                    $settings += ,@('FrameGen', 'Enabled', 'true')
+                }
                 if ($fsr4Path) {
                     $settings += ,@('Libraries', 'FfxDx12SRPath', 'auto')
                 }

@@ -63,6 +63,7 @@ Release versions use `r<release number>-<parent version>`, for example `r1-0.8.9
 The parent version identifies the wilsjo2 base. The `r` number increases for every
 release and continues when the parent version changes. `VERSION.txt` supplies the
 default package label; release notes and the changelog use the same version.
+Hotfixes retain that release number with a suffix, such as `r3-0.8.91_fix-1`.
 
 Use that installation's interpreter to install NumPy, then package:
 

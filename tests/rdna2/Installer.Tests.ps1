@@ -148,10 +148,25 @@ Write-Data (Join-Path $game 'fixture.exe') 'not executable'
 Install-Product $game $source 'dxgi.dll' $release 'unused' $models | Out-Host
 Assert-Setting 'FrameGen' 'FGInput' 'FSRFG30'
 Assert-Setting 'FrameGen' 'FGOutput' 'XeFG'
+Assert-Setting 'FrameGen' 'Enabled' 'true'
 Assert-Setting 'DlssNr' 'Enabled' 'true'
 Assert-Setting 'DlssNr' 'RunBeforeSR' 'true'
 Assert-Setting 'DlssNr' 'WorkingScale' '0.75'
 Assert ((Get-Hash (Join-Path $game 'OptiScaler/amd_fidelityfx_upscaler_dx12.dll')) -eq
         (Get-Hash (Join-Path $release 'OptiScaler/amd_fidelityfx_upscaler_dx12.dll'))) 'Bundled runtime differs.'
 Verify-Product $game | Out-Host
+foreach ($case in @(
+    @{ Saved = 'auto'; Expected = 'true' },
+    @{ Saved = ''; Expected = 'true' },
+    @{ Saved = 'false'; Expected = 'false' },
+    @{ Saved = 'true'; Expected = 'true' }
+)) {
+    $switch = if ($case.Saved) { "Enabled = $($case.Saved)" } else { '' }
+    Write-Data (Join-Path $game 'OptiScaler.ini') "[FrameGen]`nFGInput=Upscaler`nFGOutput=XeFG`n$switch`n[DlssNr]`nEnabled=false`n"
+    Install-Product $game $source 'dxgi.dll' $release 'unused' $models | Out-Host
+    Assert-Setting 'FrameGen' 'Enabled' $case.Expected
+    Assert-Setting 'FrameGen' 'FGInput' 'Upscaler'
+    Assert-Setting 'DlssNr' 'Enabled' 'false'
+    Verify-Product $game | Out-Host
+}
 Write-Output 'PASS installer: copying, migration, settings cleanup, update, rollback, verification and uninstall.'

@@ -4188,7 +4188,8 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
         if (!correctMVs || state.realExclusiveFullscreen)
         {
-            config->FGEnabled.reset();
+            // Disable explicitly: restoring the default would enable FG here.
+            config->FGEnabled = false;
             config->FGXeFGDebugView.reset();
         }
 

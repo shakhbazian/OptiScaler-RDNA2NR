@@ -650,7 +650,7 @@ class Config
     CustomOptional<FrameTimeSource> FTInput { FrameTimeSource::Input };
 
     // OptiFG
-    CustomOptional<bool> FGEnabled { false };
+    CustomOptional<bool> FGEnabled { true };
     CustomOptional<bool> FGUseMutexForSwapchain { true };
     CustomOptional<bool> FGMakeMVCopy { true };
     CustomOptional<bool> FGMakeDepthCopy { true };
