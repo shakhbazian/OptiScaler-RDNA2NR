@@ -14,7 +14,7 @@ The frontend also retains NVIDIA NGX support with a user-supplied runtime compat
 
 | Path | HIP status | Evidence / limitation |
 | --- | --- | --- |
-| D3D12 before or after SR | Implemented | Cyberpunk 2077 and The Witcher 3 DX12, plus standalone regressions |
+| D3D12 before or after SR | Implemented | Cyberpunk 2077 and The Witcher 3 Remastered (DX12), plus standalone regressions |
 | D3D11 through a Dx12 bridge upscaler | Implemented | Standalone regressions; game coverage is still limited |
 | Native D3D11-only processing | Unavailable | Select the existing D3D12 upscaler bridge instead |
 | Vulkan NR | Unavailable on HIP | Parent-fork NVIDIA Vulkan work does not provide a HIP path |

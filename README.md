@@ -4,7 +4,7 @@ DLSS 5 Neural Rendering on Radeon, integrated into OptiScaler.
 
 This fork adds an AMD HIP backend to [wilsjo2's OptiScaler-DLSSNR](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass), retaining OptiScaler's upscaler routing, frame generation and NVIDIA NGX support. NR can run before or after upscaling, with adjustable model resolution, lighting, detail and colour.
 
-The project uses NVIDIA's NR networks with mixed INT8/FP16 execution on AMD. You supply the original model DLL; the installer prepares the models locally. This is a research project, tested on an RX 6900 XT in Cyberpunk 2077 and The Witcher 3 (DirectX 12).
+The project uses NVIDIA's NR networks with mixed INT8/FP16 execution on AMD. You supply the original model DLL; the installer prepares the models locally. This is a research project, tested on an RX 6900 XT in Cyberpunk 2077 and The Witcher 3 Remastered (DirectX 12).
 
 [Download r4-0.8.10](https://github.com/shakhbazian/OptiScaler-RDNA2NR/releases/tag/r4-0.8.10) · [Changelog](Changelog.md) · [Documentation](docs/README.md)
 
@@ -33,12 +33,17 @@ A is the original NR model; B is NVIDIA's newer, optimized model. On AMD, **Auto
 
 Allow space for the extracted release, about 494 MiB for both prepared models, and backups of replaced game files.
 
+### Recommended: FSR 4 on RDNA2
+
+For the recommended upscaling setup, download the **FSR 4.0.2c INT8** runtime from [OptiScaler-builds](https://github.com/benjamimgois/OptiScaler-builds/releases/tag/fsr-int8). Select its `amd_fidelityfx_upscaler_dx12.dll` in the installer; it installs the library and selects FSR 4 automatically. This optional component brings FSR 4 upscaling to RDNA2. See [FSR 4 setup](docs/INSTALLATION.md#optional-fsr-4-int8-on-rdna2) for details.
+
 ## Quick start
 
 1. Close the game. Download the installer ZIP from [Releases](https://github.com/shakhbazian/OptiScaler-RDNA2NR/releases/latest) and extract it completely.
-2. Run `Install-RDNA2NR.cmd`. Select the folder containing the game's actual executable and your original NR DLL. Keep the default `dxgi.dll` proxy unless the game's setup requires another name. Optionally select the [FSR 4.0.2c INT8 DLL](docs/INSTALLATION.md#optional-fsr-4-int8-on-rdna2), then click **Install / update**.
-3. Start the game and enable a supported in-game upscaler. For the default frame-generation route, also enable the game's native FSR frame generation.
-4. Press **Insert**, open **DLSS Neural Rendering**, and wait for model preparation. An increasing **RDNA2 NR active** frame count confirms processing. Use the NR switch to compare the result; choose A or B under **NR model**.
+2. Run `Install-RDNA2NR.cmd`. Select the folder containing the game's actual executable and your original NR DLL. Keep the default `dxgi.dll` proxy unless the game's setup requires another name.
+3. For the recommended FSR 4 setup, select the downloaded `amd_fidelityfx_upscaler_dx12.dll` in **FSR 4.0.2c INT8 DLL**. Click **Install / update** and wait for completion.
+4. Start the game and enable a supported in-game upscaler. For the default frame-generation route, also enable the game's native FSR frame generation.
+5. Press **Insert**, open **DLSS Neural Rendering**, and wait for model preparation. An increasing **RDNA2 NR active** frame count confirms processing. Use the NR switch to compare the result; choose A or B under **NR model**.
 
 A fresh installation enables NR with **Auto** model selection, **Standard** style, **75% Model resolution**, and placement **before upscaling**. It selects FSR 4 when available, otherwise FSR 3, and uses FSR 3.0 FG input → XeFG output with **Active** enabled. Updating preserves saved settings.
 

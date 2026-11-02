@@ -24,11 +24,12 @@ Allow disk space for the extracted release, converted models of about 494 MiB fo
 3. Set **Game executable folder** to the folder containing the executable that actually renders the game. For Cyberpunk 2077 this is normally `bin\x64`.
 4. Select your original `nvngx_dlssnr.dll`. The installer prepares both models from 310.9.16.0, or model A from 310.8.0.0.
 5. Select **Proxy DLL name**. The default is `dxgi.dll`; a game or another loader may require a different name. Follow [OptiScaler's game-specific guidance](https://github.com/optiscaler/OptiScaler/wiki) and check existing mods before replacing a proxy.
-6. Click **Install / update** and wait for model preparation and verification to finish.
+6. For the recommended FSR 4 setup on RDNA2, download the [FSR 4.0.2c INT8 runtime](https://github.com/benjamimgois/OptiScaler-builds/releases/tag/fsr-int8) and select its `amd_fidelityfx_upscaler_dx12.dll` in **FSR 4.0.2c INT8 DLL**. This component is optional; the installer installs it and selects FSR 4 when provided.
+7. Click **Install / update** and wait for model preparation and verification to finish.
 
 ## Optional FSR 4 INT8 on RDNA2
 
-Use the community **FSR 4.0.2c INT8** runtime from
+For the recommended upscaling setup on RDNA2, use the community **FSR 4.0.2c INT8** runtime from
 [OptiScaler-builds](https://github.com/benjamimgois/OptiScaler-builds/releases/tag/fsr-int8).
 [Upstream OptiScaler recommends this version for RDNA2 on Windows](https://github.com/optiscaler/OptiScaler/releases/tag/v0.9.4).
 The supported `amd_fidelityfx_upscaler_dx12.dll` has SHA-256:

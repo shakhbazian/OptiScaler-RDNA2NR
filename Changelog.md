@@ -3,7 +3,7 @@
 ## r4-0.8.10
 
 - Add NVIDIA's optimized Model B from NR 310.9.16.0, with mixed INT8/FP16 execution and an A/B model selector.
-- Fix frozen or repeating frames and incorrect colours in The Witcher 3 DX12.
+- Fix frozen or repeating frames and incorrect colours in The Witcher 3 Remastered (DX12).
 - Fix NR preparation failures when changing model resolution during play.
 - Add optional Edge-aware enlargement and halo suppression for reduced-resolution NR.
 - Improve FSR provider/model discovery, preserve saved choices and support additional DX12 FFX runtime folders.
