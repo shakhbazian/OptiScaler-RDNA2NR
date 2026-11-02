@@ -134,45 +134,72 @@ struct MethodBody {
     static inline std::atomic<Observer> observer{nullptr};
     struct Invocation { unsigned endpoint; Self self; Invocation* previous; };
     static inline thread_local Invocation* active = nullptr;
+    struct TerminalFrame { unsigned endpoint; Self self; TerminalFrame* previous; bool forwarded=false; };
+    static inline thread_local TerminalFrame* terminal = nullptr;
 
     static R Original(unsigned e, Self self, A... args) {
         return endpoints[e].original(self, args...);
+    }
+    static void Delegated(unsigned e,Self self){
+        if(origin==Origin::Private||!observer.load(std::memory_order_acquire))return;
+        for(auto* p=terminal;p;p=p->previous)
+            if((e!=p->endpoint||self!=p->self)&&Same(self,p->self)){
+                p->forwarded=true;break;
+            }
+    }
+    static R Terminal(unsigned e, Self self, A... args) {
+        const auto observe=origin!=Origin::Private?observer.load(std::memory_order_acquire):nullptr;
+        TerminalFrame frame{e,self,terminal};
+        Delegated(e,self);
+        struct Guard {
+            TerminalFrame* previous;
+            explicit Guard(TerminalFrame* value):previous(terminal){terminal=value;}
+            ~Guard(){terminal=previous;}
+        } guard(&frame);
+        if constexpr(std::is_void_v<R>){
+            Original(e,self,args...);
+            if(observe&&!frame.forwarded){
+                observe(self,args...);
+            }
+        }else{
+            const auto result=Original(e,self,args...);
+            if(observe&&!frame.forwarded){
+                observe(self,args...,result);
+            }return result;
+        }
     }
     static R Next(unsigned e, int last, Self self, A... args) {
         if (origin == Origin::Game)
             for (int i=last;i>=0;--i)
                 if (const auto fn=endpoints[e].listeners[i].load(std::memory_order_acquire))
                     return fn(self,args...);
-        return Original(e,self,args...);
+        // Observe the command that actually reaches the endpoint, before a
+        // listener can append another command, rewrite, repeat or suppress it.
+        return Terminal(e,self,args...);
     }
-    template<class Call> static R Observed(unsigned e, Self self, Call&& call, A... args) {
+    template<class Call> static R Invoked(unsigned e, Self self, Call&& call) {
         Invocation invocation{e,self,active};
-        bool nested = false;
-        for (auto* p=active;p;p=p->previous)
-            if (Same(self,p->self)) { nested=true;break; }
         struct Guard {
             Invocation* previous;
             explicit Guard(Invocation* value):previous(active){active=value;}
             ~Guard(){active=previous;}
         } guard(&invocation);
-        const auto observe = (origin != Origin::Private && !nested)
-            ? observer.load(std::memory_order_acquire) : nullptr;
-        if constexpr (std::is_void_v<R>) {
-            call(); if(observe)observe(self,args...);
-        } else {
-            const auto result=call(); if(observe)observe(self,args...,result);return result;
-        }
+        return call();
     }
     template<unsigned E> static R STDMETHODCALLTYPE Entry(Self self,A... args) {
-        return Observed(E,self,[&] { return Next(E,int(MaxListeners)-1,self,args...); },args...);
+        // Delegation is established even if this endpoint's listener suppresses
+        // the command or replaces it with another method.
+        Delegated(E,self);
+        return Invoked(E,self,[&] { return Next(E,int(MaxListeners)-1,self,args...); });
     }
     template<unsigned E,unsigned L> static R STDMETHODCALLTYPE Continue(Self self,A... args) {
+        Delegated(E,self);
         if(active && active->endpoint==E && Same(self,active->self))
             return Next(E,int(L)-1,self,args...);
         // Original-bypass calls restore state. Observe them exactly once, with
         // no callbacks to the legacy tracker whose mutex may guard the snapshot.
         OriginScope scope(origin==Origin::Private?Origin::Private:Origin::Restore);
-        return Observed(E,self,[&] { return Original(E,self,args...); },args...);
+        return Invoked(E,self,[&] { return Terminal(E,self,args...); });
     }
     template<unsigned E> static Fn Continuation(unsigned l) {
         switch(l) {

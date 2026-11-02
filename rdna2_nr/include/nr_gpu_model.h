@@ -14,6 +14,7 @@ class GpuModel {
 
     const void* TensorData(std::uint32_t block, const char* role,
                            std::size_t elementCount) const;
+    unsigned GraphVersion() const noexcept { return package_.GraphVersion(); }
     std::size_t ByteLength() const noexcept { return byteLength_; }
     std::size_t TensorCount() const noexcept { return package_.TensorCount(); }
     std::size_t UploadOperations() const noexcept { return device_ ? 1 : 0; }

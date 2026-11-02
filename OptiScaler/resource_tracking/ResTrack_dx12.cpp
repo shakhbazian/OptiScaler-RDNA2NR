@@ -1,4 +1,5 @@
 #include "pch.h"
+#include <dlssnr/native/NativeHookHub.h>
 
 #include <dlssnr/DlssNr.h>
 #include <dlssnr/native/NativeQueueTransaction.h>
@@ -13,6 +14,8 @@
 
 #include <algorithm>
 #include <future>
+
+static std::recursive_mutex commandHookSetupMutex;
 
 #include <d3dcommon.h>
 #include <detours/detours.h>
@@ -2500,6 +2503,7 @@ void ResTrack_Dx12::hkDispatch(ID3D12GraphicsCommandList* This, UINT ThreadGroup
 
 void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
 {
+    std::lock_guard setupLock(commandHookSetupMutex);
 
     if (o_OMSetRenderTargets != nullptr)
         return;
@@ -2520,6 +2524,22 @@ void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
             PVOID* pVTable = *(PVOID**) realCL;
             const bool persistentBindings = Config::Instance()->FGHudfixPersistentBindings.value_or_default();
 
+            if (DlssNr::NativeHooks::Begin() != NO_ERROR)
+            {
+                commandList->Close();
+                commandList->Release();
+                commandAllocator->Release();
+                LOG_WARN("Command-list hook setup is already busy");
+                return;
+            }
+            if (o_OMSetRenderTargets != nullptr)
+            {
+                DlssNr::NativeHooks::Abort();
+                commandList->Close();
+                commandList->Release();
+                commandAllocator->Release();
+                return;
+            }
             // Persistent command-list binding invalidation
             if (persistentBindings)
             {
@@ -2540,37 +2560,34 @@ void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
 
             if (o_OMSetRenderTargets != nullptr)
             {
-                DetourTransactionBegin();
-                DetourUpdateThread(GetCurrentThread());
-
                 // Only needed for hudfix
                 if (State::Instance().activeFgInput == FGInput::Upscaler)
                 {
                     if (o_Reset != nullptr)
-                        DetourAttach(&(PVOID&) o_Reset, hkReset);
+                        DlssNr::NativeHooks::Attach<10>(&o_Reset, hkReset);
                     if (o_ClearState != nullptr)
-                        DetourAttach(&(PVOID&) o_ClearState, hkClearState);
+                        DlssNr::NativeHooks::Attach<11>(&o_ClearState, hkClearState);
 
                     if (o_OMSetRenderTargets != nullptr)
-                        DetourAttach(&(PVOID&) o_OMSetRenderTargets, hkOMSetRenderTargets);
+                        DlssNr::NativeHooks::Attach<46>(&o_OMSetRenderTargets, hkOMSetRenderTargets);
 
                     if (o_SetGraphicsRootDescriptorTable != nullptr)
-                        DetourAttach(&(PVOID&) o_SetGraphicsRootDescriptorTable, hkSetGraphicsRootDescriptorTable);
+                        DlssNr::NativeHooks::Attach<32>(&o_SetGraphicsRootDescriptorTable, hkSetGraphicsRootDescriptorTable);
 
                     if (o_SetComputeRootDescriptorTable != nullptr)
-                        DetourAttach(&(PVOID&) o_SetComputeRootDescriptorTable, hkSetComputeRootDescriptorTable);
+                        DlssNr::NativeHooks::Attach<31>(&o_SetComputeRootDescriptorTable, hkSetComputeRootDescriptorTable);
 
                     if (o_DrawIndexedInstanced != nullptr)
-                        DetourAttach(&(PVOID&) o_DrawIndexedInstanced, hkDrawIndexedInstanced);
+                        DlssNr::NativeHooks::Attach<13>(&o_DrawIndexedInstanced, hkDrawIndexedInstanced);
 
                     if (o_DrawInstanced != nullptr)
-                        DetourAttach(&(PVOID&) o_DrawInstanced, hkDrawInstanced);
+                        DlssNr::NativeHooks::Attach<12>(&o_DrawInstanced, hkDrawInstanced);
 
                     if (o_Dispatch != nullptr)
-                        DetourAttach(&(PVOID&) o_Dispatch, hkDispatch);
+                        DlssNr::NativeHooks::Attach<14>(&o_Dispatch, hkDispatch);
                 }
 
-                auto detourResult = DetourTransactionCommit();
+                auto detourResult = DlssNr::NativeHooks::Commit();
                 if (detourResult != NO_ERROR)
                 {
                     LOG_ERROR("Failed to hook CommandList methods: {:X}", detourResult);
@@ -2589,6 +2606,8 @@ void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
                     _bindingTrackingEnabled.store(persistentBindings, std::memory_order_release);
                 }
             }
+            else
+                DlssNr::NativeHooks::Abort();
 
             commandList->Close();
             commandList->Release();
@@ -2602,6 +2621,7 @@ void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
 static void HookNrQueue(ID3D12Device* device);
 void ResTrack_Dx12::HookLateNrQueue(ID3D12Device* device)
 {
+    std::lock_guard setupLock(commandHookSetupMutex);
     static std::mutex hookMutex;
     std::lock_guard<std::mutex> lock(hookMutex);
     HookNrQueue(device);
@@ -2617,11 +2637,17 @@ void ResTrack_Dx12::HookLateNrQueue(ID3D12Device* device)
             ID3D12GraphicsCommandList* real = nullptr;
             if (!CheckForRealObject(__FUNCTION__, cmd, (IUnknown**) &real))
                 real = cmd;
+            if (DlssNr::NativeHooks::Begin() != NO_ERROR)
+            {
+                cmd->Close();
+                cmd->Release();
+                allocator->Release();
+                LOG_WARN("Late reset hook setup is already busy");
+                return;
+            }
             o_LateReset = (PFN_LateReset) (*(void***) real)[10];
-            DetourTransactionBegin();
-            DetourUpdateThread(GetCurrentThread());
-            DetourAttach(&(PVOID&) o_LateReset, hkLateReset);
-            if (DetourTransactionCommit() != NO_ERROR)
+            DlssNr::NativeHooks::Attach<10>(&o_LateReset, hkLateReset);
+            if (DlssNr::NativeHooks::Commit() != NO_ERROR)
                 o_LateReset = nullptr;
             cmd->Close();
             cmd->Release();
@@ -2781,10 +2807,14 @@ void ResTrack_Dx12::HookDevice(ID3D12Device* device)
 
 void ResTrack_Dx12::ReleaseDeviceHooks()
 {
+    std::lock_guard setupLock(commandHookSetupMutex);
     LOG_DEBUG("");
 
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
+    if (DlssNr::NativeHooks::Begin() != NO_ERROR)
+    {
+        LOG_WARN("Device hooks are busy; retaining the registered callbacks");
+        return;
+    }
 
     if (o_CreateDescriptorHeap != nullptr)
         DetourDetach(&(PVOID&) o_CreateDescriptorHeap, hkCreateDescriptorHeap);
@@ -2806,32 +2836,32 @@ void ResTrack_Dx12::ReleaseDeviceHooks()
 
     // CommandList
     if (o_Reset != nullptr)
-        DetourDetach(&(PVOID&) o_Reset, hkReset);
+        DlssNr::NativeHooks::Detach<10>(&o_Reset, hkReset);
     if (o_ClearState != nullptr)
-        DetourDetach(&(PVOID&) o_ClearState, hkClearState);
+        DlssNr::NativeHooks::Detach<11>(&o_ClearState, hkClearState);
 
     if (o_OMSetRenderTargets != nullptr)
-        DetourDetach(&(PVOID&) o_OMSetRenderTargets, hkOMSetRenderTargets);
+        DlssNr::NativeHooks::Detach<46>(&o_OMSetRenderTargets, hkOMSetRenderTargets);
 
     if (o_SetGraphicsRootDescriptorTable != nullptr)
-        DetourDetach(&(PVOID&) o_SetGraphicsRootDescriptorTable, hkSetGraphicsRootDescriptorTable);
+        DlssNr::NativeHooks::Detach<32>(&o_SetGraphicsRootDescriptorTable, hkSetGraphicsRootDescriptorTable);
 
     if (o_SetComputeRootDescriptorTable != nullptr)
-        DetourDetach(&(PVOID&) o_SetComputeRootDescriptorTable, hkSetComputeRootDescriptorTable);
+        DlssNr::NativeHooks::Detach<31>(&o_SetComputeRootDescriptorTable, hkSetComputeRootDescriptorTable);
 
     if (o_DrawIndexedInstanced != nullptr)
-        DetourDetach(&(PVOID&) o_DrawIndexedInstanced, hkDrawIndexedInstanced);
+        DlssNr::NativeHooks::Detach<13>(&o_DrawIndexedInstanced, hkDrawIndexedInstanced);
 
     if (o_DrawInstanced != nullptr)
-        DetourDetach(&(PVOID&) o_DrawInstanced, hkDrawInstanced);
+        DlssNr::NativeHooks::Detach<12>(&o_DrawInstanced, hkDrawInstanced);
 
     if (o_Dispatch != nullptr)
-        DetourDetach(&(PVOID&) o_Dispatch, hkDispatch);
+        DlssNr::NativeHooks::Detach<14>(&o_Dispatch, hkDispatch);
 
     if (o_LateReset != nullptr)
-        DetourDetach(&(PVOID&) o_LateReset, hkLateReset);
+        DlssNr::NativeHooks::Detach<10>(&o_LateReset, hkLateReset);
 
-    auto detourResult = DetourTransactionCommit();
+    auto detourResult = DlssNr::NativeHooks::Commit();
     if (detourResult != NO_ERROR)
     {
         LOG_ERROR("Failed to unhook DX12 methods: {:X}", detourResult);
@@ -2864,10 +2894,14 @@ void ResTrack_Dx12::ReleaseDeviceHooks()
 
 void ResTrack_Dx12::ReleaseHooks()
 {
+    std::lock_guard setupLock(commandHookSetupMutex);
     LOG_DEBUG("");
 
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
+    if (DlssNr::NativeHooks::Begin() != NO_ERROR)
+    {
+        LOG_WARN("Resource hooks are busy; retaining the registered callbacks");
+        return;
+    }
 
     // if (o_CreateDescriptorHeap != nullptr)
     //     DetourDetach(&(PVOID&) o_CreateDescriptorHeap, hkCreateDescriptorHeap);
@@ -2895,33 +2929,33 @@ void ResTrack_Dx12::ReleaseHooks()
     // o_CopyDescriptorsSimple = nullptr;
 
     if (o_Reset != nullptr)
-        DetourDetach(&(PVOID&) o_Reset, hkReset);
+        DlssNr::NativeHooks::Detach<10>(&o_Reset, hkReset);
 
     if (o_ClearState != nullptr)
-        DetourDetach(&(PVOID&) o_ClearState, hkClearState);
+        DlssNr::NativeHooks::Detach<11>(&o_ClearState, hkClearState);
 
     if (o_OMSetRenderTargets != nullptr)
-        DetourDetach(&(PVOID&) o_OMSetRenderTargets, hkOMSetRenderTargets);
+        DlssNr::NativeHooks::Detach<46>(&o_OMSetRenderTargets, hkOMSetRenderTargets);
 
     if (o_SetGraphicsRootDescriptorTable != nullptr)
-        DetourDetach(&(PVOID&) o_SetGraphicsRootDescriptorTable, hkSetGraphicsRootDescriptorTable);
+        DlssNr::NativeHooks::Detach<32>(&o_SetGraphicsRootDescriptorTable, hkSetGraphicsRootDescriptorTable);
 
     if (o_SetComputeRootDescriptorTable != nullptr)
-        DetourDetach(&(PVOID&) o_SetComputeRootDescriptorTable, hkSetComputeRootDescriptorTable);
+        DlssNr::NativeHooks::Detach<31>(&o_SetComputeRootDescriptorTable, hkSetComputeRootDescriptorTable);
 
     if (o_DrawIndexedInstanced != nullptr)
-        DetourDetach(&(PVOID&) o_DrawIndexedInstanced, hkDrawIndexedInstanced);
+        DlssNr::NativeHooks::Detach<13>(&o_DrawIndexedInstanced, hkDrawIndexedInstanced);
 
     if (o_DrawInstanced != nullptr)
-        DetourDetach(&(PVOID&) o_DrawInstanced, hkDrawInstanced);
+        DlssNr::NativeHooks::Detach<12>(&o_DrawInstanced, hkDrawInstanced);
 
     if (o_Dispatch != nullptr)
-        DetourDetach(&(PVOID&) o_Dispatch, hkDispatch);
+        DlssNr::NativeHooks::Detach<14>(&o_Dispatch, hkDispatch);
 
     if (o_LateReset != nullptr)
-        DetourDetach(&(PVOID&) o_LateReset, hkLateReset);
+        DlssNr::NativeHooks::Detach<10>(&o_LateReset, hkLateReset);
 
-    auto detourResult = DetourTransactionCommit();
+    auto detourResult = DlssNr::NativeHooks::Commit();
     if (detourResult != NO_ERROR)
     {
         LOG_ERROR("Failed to unhook CommandList methods: {:X}", detourResult);

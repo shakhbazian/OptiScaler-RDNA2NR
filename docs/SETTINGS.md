@@ -14,6 +14,7 @@ Equivalent basic settings in `OptiScaler.ini`:
 [DlssNr]
 Enabled=true
 Backend=4
+HipModel=auto
 RunBeforeSR=true
 Passes=1
 WorkingScale=0.75
@@ -25,8 +26,8 @@ ApplyModel=true
 A fresh configuration enables NR with Standard, 75% model resolution and pre-upscale placement. For D3D12 and the D3D11/D3D12 bridge, the loaded runtime selects FSR 4 when available, otherwise FSR 3. An explicit provider selection is retained when saving settings. The existing FSR fallback applies if initialization fails. Frame generation defaults to **FSR 3.0 FG** input with **XeFG** output and **Active** enabled. Enable the game's native FSR frame generation to use this route. A saved explicit **Active** off setting is preserved on updates; enable it once if desired. Other games may need a different input; **OptiFG (Upscaler)** works without native FG. Save settings and restart after changing the FG source or output. Existing INI files are preserved by the installer.
 
 For FSR 4 INT8, use the [optional runtime setup](INSTALLATION.md#optional-fsr-4-int8-on-rdna2).
-**FSR 3.X/4** names the available upscaler family. Choose the provider version
-in its settings and use **Watermark** to confirm which implementation runs.
+Choose the FSR provider version under **FFX Upscaler**. **Watermark** can
+temporarily identify the implementation running on the rendered image.
 
 ### HUD handling
 
@@ -49,7 +50,23 @@ when it is unavailable. Keep that restriction in place when using XeFG.
 
 Backend choice is independent of FSR, XeSS or DLSS selection and of frame generation. Forcing an incompatible backend reports it unavailable; it does not quietly choose another GPU.
 
-Multipass, spatial compression, finished-picture processing, separate edit upscaling and frame holding are unavailable on HIP. NVIDIA precision choices are not HIP quality selectors. The HIP arithmetic split is fixed by this build.
+HIP supports one pass before or after upscaling. See [compatibility](COMPATIBILITY.md#rendering-paths) for other processing modes.
+
+## NR model
+
+The HIP **NR model** selector is independent of the backend and style preset:
+
+| Choice | Behaviour |
+| --- | --- |
+| Auto (`HipModel=auto`) | Prefer B when its prepared package is available; otherwise use A. |
+| Model B (`HipModel=b`) | The newer, faster 31-block network from 310.9.16.0. |
+| Model A (`HipModel=a`) | The original 71-block network, available in both supported DLL builds. |
+
+Use NR DLL 310.9.16.0 (recommended) to prepare models A and B, or 310.8.0.0 for A only.
+Unavailable choices are disabled. A model switch drains the previous session,
+prepares the new weights and resets history. NR can briefly show the original
+image while preparation finishes. The Style, Tone, Structure and scale settings
+are retained; A and B can produce different edits with the same settings.
 
 ## Model resolution
 
@@ -60,10 +77,9 @@ image keeps its original dimensions. Before-SR percentages refer to the render
 input; after-SR percentages refer to the upscaler output.
 
 Below 100%, OptiScaler filters the model input down and transfers the resulting
-edit back onto the full-size image. **Enlargement** selects Classic, Matched
-residual or Lighting + colour on HIP. The latter two transfer the change rather
-than simply stretching the entire processed picture. Test faces and moving
-edges when choosing a scale and composition mode.
+edit back onto the full-size image. **Enlargement** offers Classic, Matched
+residual, Lighting + colour and Edge-aware on HIP. See [enlargement modes](#enlarging-the-nr-edit)
+for their differences. Test faces and moving edges when choosing a scale.
 
 Above 100%, NR runs on an enlarged input, then its result is reduced to frame
 size with the selected **Downscaler (NR)**. This increases work and memory use.
@@ -74,7 +90,7 @@ ratio. WorkingScale=0.5 in the INI corresponds to 50%.
 
 ## Model controls
 
-These values are inputs to the original network, rather than post-processing substitutes for it.
+Style, tone and structure control the original network. Intensity adjusts the amount of its effect.
 
 | Control | Range / default | Use |
 | --- | --- | --- |
@@ -86,9 +102,46 @@ These values are inputs to the original network, rather than post-processing sub
 | Auto skin mask | On | Use the model's skin selection. |
 | Temporal accumulation | On | Use available motion/history across real input frames. |
 
+On HIP, these controls edit the single active model pass. Slider edits apply when
+the slider is released. Skin controls depend on the scene and the model's skin
+selection; they do not apply a uniform filter to the whole image.
+
 Control effects depend on the scene. A large setting does not guarantee a better result, and model controls are not general performance knobs.
 
 **Transfer strength** and **Colour strength** blend the model's edit into the output. Reducing their values can soften the visible change, but does not remove the cost of inference. Additional skin-protection composition controls are colour-based filters; they are separate from the model's Auto skin mask.
+
+### Enlarging the NR edit
+
+At model resolutions below 100%, **Enlargement** controls how the smaller
+model result is transferred onto the full-sized image:
+
+| Mode | Behaviour |
+| --- | --- |
+| Classic | Resize the model answer for composition. |
+| Matched residual (default) | Transfer the difference between the model input and answer. |
+| Lighting + colour | Transfer relative lighting and colour separately. |
+| Edge-aware | Use brightness edges to reduce leakage of the edit between surfaces. |
+
+All modes preserve the output frame size and use the same network inference.
+
+The **Halo suppression (experimental)** section filters dark rims against
+brighter or darker backgrounds. Both strength sliders start at zero (off).
+Enabling either adds a GPU pass and can lighten real shadows; compare before saving.
+
+On NVIDIA, **NR model** selects Automatic, Original or Optimized. Optimized
+uses model B from 310.9.16.0; Original uses A. HIP uses its separate A/B selector.
+
+### Additional DX12 FFX runtimes
+
+Place an alternative FFX runtime in `custom/<name>/ffx` beside the OptiScaler
+installation, then restart the game. It appears as `<name> (FFX)` in the
+upscaler list. Use `amd_fidelityfx_upscaler_dx12.dll` as the filename when the
+folder contains several DLLs. This is separate from the installer-managed FSR
+4.0.2c runtime. Each named runtime keeps its own provider index.
+
+For a driver provider stored outside the detected AMD driver store, set
+`[Libraries] Fsr4DriverPath` to its DLL or directory. The usual automatic search
+remains the default.
 
 ## Compare the result
 

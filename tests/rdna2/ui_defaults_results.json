@@ -1,0 +1,66 @@
+{
+  "date": "2026-10-18T20:34:54.2861989+03:00",
+  "artifactVersion": "r3-0.8.91_fix-1_model-b-test-3",
+  "sourceBaseCommit": "ce15f0c8aced206ce6c89775e88367396934103b",
+  "frontendSha256": "B964F880AB7BF16DEBA80CD703CEA9361CA01F503D833AC2945811C484C965E5",
+  "diagnosticFrontendSha256": "F4CA8DB067272F5984437A6E25C37CA4D04CD5828620D28CFC316CBC1DC3297A",
+  "hipSha256": "6DF2C10508564C2B6EA7ECE13A7B3FF64E198D588FF3C7C1C366F12F2D44A9A6",
+  "productionPrePostOracleParity": true,
+  "portraitWidth": 854,
+  "portraitHeight": 1080,
+  "nrScale": 0.75,
+  "controls": [
+    {
+      "changed": true,
+      "first": "1EB3915ED4C8239D83413DE633B8EA0924F748646E30CAFAFFCC09CA95798B3D",
+      "other": "CE3383ABE4C160E951512F0FF98BECAB865BF0F7C51773783D20198B444C566A",
+      "index": 0,
+      "field": "Style",
+      "returnedExactly": true
+    },
+    {
+      "changed": true,
+      "first": "1EB3915ED4C8239D83413DE633B8EA0924F748646E30CAFAFFCC09CA95798B3D",
+      "other": "4157F0803F23900742B026EF8145AED9D091BB74C965D9A5217EFB349A68A961",
+      "index": 1,
+      "field": "Local tone",
+      "returnedExactly": true
+    },
+    {
+      "changed": true,
+      "first": "1EB3915ED4C8239D83413DE633B8EA0924F748646E30CAFAFFCC09CA95798B3D",
+      "other": "7DA98A3EC276C1B2A64825D6E477D34CB74C778EA67AFD213654B649243F7031",
+      "index": 2,
+      "field": "Local structure",
+      "returnedExactly": true
+    },
+    {
+      "changed": true,
+      "first": "1EB3915ED4C8239D83413DE633B8EA0924F748646E30CAFAFFCC09CA95798B3D",
+      "other": "7DA98A3EC276C1B2A64825D6E477D34CB74C778EA67AFD213654B649243F7031",
+      "index": 3,
+      "field": "Skin structure",
+      "returnedExactly": true
+    },
+    {
+      "changed": true,
+      "first": "1EB3915ED4C8239D83413DE633B8EA0924F748646E30CAFAFFCC09CA95798B3D",
+      "other": "EBE95918EC9E3236D8CBF32F24E9F1B14785C5FB1194B2EC2CFFA0F906377E23",
+      "index": 4,
+      "field": "Auto skin mask",
+      "returnedExactly": true
+    },
+    {
+      "changed": true,
+      "first": "1EB3915ED4C8239D83413DE633B8EA0924F748646E30CAFAFFCC09CA95798B3D",
+      "other": "FAD8837F0CAE4A19BF2D8F9DB699155B5CDF62660675547608823B478C4D2F32",
+      "index": 5,
+      "field": "Intensity",
+      "returnedExactly": true
+    }
+  ],
+  "installerWindowsPowerShell51": true,
+  "freshDefaultsVerified": true,
+  "fsrProviderPolicyVerified": true,
+  "gameRunValidated": false
+}

@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "DlssNrFeature_Vk_Internal.h"
+#include "ModelGuideContract.h"
 #include "DlssNrFeature_Dx12.h"
 #include "DlssNr_Status.h"
 #include "DlssNr_Placement.h"
@@ -129,8 +130,8 @@ bool ModelVk::Impl::Evaluate(VkCommandBuffer cmdBuffer, const VkImageInfo& colou
     }
     const auto depthX = frame.DepthSubrectBaseX, depthY = frame.DepthSubrectBaseY;
     const auto motionX = frame.MotionSubrectBaseX, motionY = frame.MotionSubrectBaseY;
-    const auto outputWidth = frame.OutputWidth ? frame.OutputWidth : target.Width;
-    const auto outputHeight = frame.OutputHeight ? frame.OutputHeight : target.Height;
+    const auto outputWidth = frame.OutputWidth ? frame.OutputWidth : beforeSr ? 0u : target.Width;
+    const auto outputHeight = frame.OutputHeight ? frame.OutputHeight : beforeSr ? 0u : target.Height;
     auto guides = ResolveGuideRegions({ depth->Resource.ImageViewInfo.Width, depth->Resource.ImageViewInfo.Height },
                                       { motion->Resource.ImageViewInfo.Width, motion->Resource.ImageViewInfo.Height },
                                       { renderWidth, renderHeight }, { outputWidth, outputHeight },
@@ -436,19 +437,73 @@ bool ModelVk::Impl::Evaluate(VkCommandBuffer cmdBuffer, const VkImageInfo& colou
         modelInput = &state.proxySmall;
     }
 
+    // Below native (spatial compression packs its own guides), the model was handed a colour at
+    // the working size and the game's depth and motion at their own size, with only the vector
+    // magnitudes rescaled -- the contract the D3D12 path had before MatchGuides, and it flickered at
+    // every scale below 100% there. Same fix, same shader mode: resample both to the working size
+    // and describe them as a full zero-origin region. The vectors keep the game's units; the scale
+    // below converts them. Mirrors DlssNr_Dx12_Run.cpp.
+    const auto originalModelGuides = guides;
+    bool matchedGuides = false;
+    if (reduced && workWidth < width && cfg.DlssNrMatchGuides.value_or_default() && state.depthSmall.Valid() &&
+        state.motionSmall.Valid())
+    {
+        DlssNrConstants resize {};
+        resize.Mode = DlssNrMode_ResizePrivateGuides;
+        resize.Width = workWidth;
+        resize.Height = workHeight;
+        resize.GuideWidth = guides.depth.width;
+        resize.GuideHeight = guides.depth.height;
+        resize.DebugView = guides.depth.x;
+        resize.CompareMode = guides.depth.y;
+        resize.TransferStrength = float(guides.motion.width);
+        resize.ColourStrength = float(guides.motion.height);
+        resize.CompareSwap = guides.motion.x;
+        resize.Transfer = guides.motion.y;
+        resize.MvScaleX = resize.MvScaleY = 1.0f;
+        Transition(cmdBuffer, state.depthSmall, VK_IMAGE_LAYOUT_GENERAL);
+        Transition(cmdBuffer, state.motionSmall, VK_IMAGE_LAYOUT_GENERAL);
+        // Mode 10 reads depth through the source slot and motion through the model slot; both are
+        // the game's images, so both layouts are stated.
+        if (state.pass->Dispatch(cmdBuffer, resize, workWidth, workHeight, depthInfo.ImageView, motionInfo.ImageView,
+                                 VK_NULL_HANDLE, VK_NULL_HANDLE, state.depthSmall.info.ImageView,
+                                 state.motionSmall.info.ImageView,
+                                 frame.DepthReadWrite ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false, nullptr,
+                                 frame.MotionReadWrite ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL))
+        {
+            depthResource = WrapImage(state.depthSmall.info, true);
+            motionResource = WrapImage(state.motionSmall.info, true);
+            guides = { { 0, 0, workWidth, workHeight }, { 0, 0, workWidth, workHeight } };
+            matchedGuides = true;
+        }
+        else if (!warnedMatchGuides)
+        {
+            warnedMatchGuides = true;
+            LOG_WARN("DLSS-NR Vulkan: guides could not be matched to the working size; the model keeps the game's "
+                     "{}x{} guides for its {}x{} colour",
+                     guideWidth, guideHeight, workWidth, workHeight);
+        }
+    }
+
     // -----------------------------------------------------------------------------------------
     // The model
     // -----------------------------------------------------------------------------------------
 
-    float mvX = frame.MvScaleX, mvY = frame.MvScaleY;
-    // Match D3D12: preserve the game's vector encoding, then adjust only for the NR working scale.
-    if (spatial.active)
-        mvX = mvY = 1.0f; // packed vectors already carry displacement in packed pixels
-    else
-    {
-        mvX *= (float) workWidth / width;
-        mvY *= (float) workHeight / height;
-    }
+    const bool renderMotionScale = cfg.DlssNrRenderMotionScale.value_or_default();
+    const auto motionUnits = DlssNr::MotionFactors({{width,height},{workWidth,workHeight},
+        {originalModelGuides.motion.width,originalModelGuides.motion.height},{renderWidth,renderHeight},
+        {outputWidth,outputHeight},frame.MotionVectorsLowResolution,matchedGuides,renderMotionScale});
+    const float mvX = spatial.active?1.f:frame.MvScaleX*motionUnits.x;
+    const float mvY = spatial.active?1.f:frame.MvScaleY*motionUnits.y;
+    const auto& sourceGuides = originalModelGuides;
+    const std::array<unsigned,14> contract{sourceGuides.depth.x,sourceGuides.depth.y,sourceGuides.depth.width,sourceGuides.depth.height,
+        sourceGuides.motion.x,sourceGuides.motion.y,sourceGuides.motion.width,sourceGuides.motion.height,
+        motionUnits.reference.width,motionUnits.reference.height,workWidth,workHeight,
+        matchedGuides?1u:0u,spatial.active?1u:renderMotionScale?2u:0u};
+    const std::array<float,2> scale{mvX,mvY};
+    state.reset |= !state.guideContractValid || state.guideContract != contract || state.guideMotionScale != scale;
+    state.guideContractValid = true;state.guideContract = contract;state.guideMotionScale = scale;
     ImageVk* answer = &state.output;
     ImageVk* input = modelInput;
     bool clampFailed = false;
@@ -510,6 +565,22 @@ bool ModelVk::Impl::Evaluate(VkCommandBuffer cmdBuffer, const VkImageInfo& colou
     resolve.Mode = DlssNrMode_Resolve;
     resolve.ReplaceDetailStrength = cfg.DlssNrReplaceDetailStrength.value_or_default();
     resolve.ModelWorkScale = workScale;
+
+    if (DlssNr_Common::HaloEnabled(cfg) && state.passClamp.Valid() && cfg.DlssNrDebugView.value_or_default() != 2)
+    {
+        Transition(cmdBuffer, *modelInput, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        Transition(cmdBuffer, *answer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        Transition(cmdBuffer, state.passClamp, VK_IMAGE_LAYOUT_GENERAL);
+        auto halo = resolve;
+        halo.Mode = DlssNrMode_SuppressHalo;
+        halo.Width = workWidth;
+        halo.Height = workHeight;
+        if (state.pass->Dispatch(cmdBuffer, halo, workWidth, workHeight, modelInput->info.ImageView,
+                                  answer->info.ImageView, VK_NULL_HANDLE, VK_NULL_HANDLE,
+                                  state.passClamp.info.ImageView, VK_NULL_HANDLE,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL))
+            answer = &state.passClamp;
+    }
 
     // Downsample the model answer to native before composition.
     ImageVk* resolveProxy = modelInput;
@@ -623,6 +694,7 @@ bool ModelVk::Impl::Evaluate(VkCommandBuffer cmdBuffer, const VkImageInfo& colou
         reported = true;
         LOG_INFO("DLSS-NR Vulkan: running {} SR at {}x{}, guides {}x{}", beforeSr ? "before" : "after", width, height,
                  guideWidth, guideHeight);
+
     }
     state.spatialRan = spatial.active;
     return true;

@@ -44,8 +44,6 @@ auto DlssNr_Dx12::State::ConsumeControls() -> void
         modelRunning = false;
         RetryAfterFailure();
     }
-    if (requested.captureGeneration != controls.captureGeneration)
-        captureFrames.request(requested.captureFrames);
     controls = requested;
 }
 

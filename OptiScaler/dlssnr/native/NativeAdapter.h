@@ -33,7 +33,9 @@ const char* Mark(ID3D12GraphicsCommandList* list,NVSDK_NGX_Parameter* parameters
 // attached to the game's marker; raw submission never executes codec commands.
 const char* RecordFrontend(ID3D12GraphicsCommandList*,NVSDK_NGX_Parameter*,bool,
                           std::shared_ptr<void>,const std::function<void(ID3D12GraphicsCommandList*)>&,
-                          bool interop=false) noexcept;
+                          bool interop=false,ID3D12Resource* fallbackOutput=nullptr,
+                          D3D12_RESOURCE_STATES fallbackState=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                          const std::function<void(ID3D12GraphicsCommandList*,D3D12_RESOURCE_STATES)>& fallbackCopy={}) noexcept;
 bool FrontendActive() noexcept;
 D3D12_RESOURCE_STATES FrontendColorState() noexcept;
 void CompleteFrontend() noexcept;

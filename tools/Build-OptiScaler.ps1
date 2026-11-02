@@ -37,8 +37,15 @@ if($NativeTestHooks){$argsList += '/p:NrNativeTestHooks=true'}
 # Packaging is tested separately through its manifest-based package_release.ps1.
 $commit = (& git -C $source rev-parse HEAD).Trim()
 $date = (& git -C $source show -s --format=%cs HEAD).Trim().Replace('-','')
-[IO.File]::WriteAllText((Join-Path $source 'OptiScaler/resource_build_commit.h'), "#define VER_BUILD_COMMIT `"$($commit.Substring(0,8))`"`n")
-[IO.File]::WriteAllText((Join-Path $source 'OptiScaler/resource_build_date.h'), "#define VER_BUILD_DATE `"${date}_000000`"`n")
+# Keep unchanged version headers intact so repeated product/test builds can reuse objects.
+function Write-BuildHeader([string]$Relative, [string]$Text) {
+    $path = Join-Path $source $Relative
+    if (-not (Test-Path -LiteralPath $path) -or [IO.File]::ReadAllText($path) -ne $Text) {
+        [IO.File]::WriteAllText($path, $Text)
+    }
+}
+Write-BuildHeader 'OptiScaler/resource_build_commit.h' "#define VER_BUILD_COMMIT `"$($commit.Substring(0,8))`"`n"
+Write-BuildHeader 'OptiScaler/resource_build_date.h' "#define VER_BUILD_DATE `"${date}_000000`"`n"
 $start.Arguments = ($argsList | ForEach-Object { '"' + $_ + '"' }) -join ' '
 $started = Get-Date
 $process = [Diagnostics.Process]::Start($start)
@@ -57,4 +64,4 @@ if (Test-Path -LiteralPath $dll) { $receipt.dllSha256=(Get-FileHash -LiteralPath
 $receipt | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $reportDir 'frontend-build.json')
 Get-Content -LiteralPath $log -Tail 12
 if ($process.ExitCode) { throw "Base build failed: $($process.ExitCode)" }
-Write-Output $(if($NativeTestHooks){'PASS RDNA2 diagnostic source build'}else{'PASS RDNA2 product source build'})
+Write-Output $(if($NativeTestHooks){'PASS RDNA2 regression-test source build'}else{'PASS RDNA2 product source build'})

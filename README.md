@@ -1,73 +1,67 @@
 # OptiScaler-RDNA2NR
 
-DLSS Neural Rendering on Radeon, integrated into OptiScaler.
+DLSS 5 Neural Rendering on Radeon, integrated into OptiScaler.
 
-This fork adds a HIP backend for RDNA2 to [wilsjo2's OptiScaler-DLSSNR](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass). It keeps OptiScaler's DLSS/FSR/XeSS routing, frame-generation features and ordinary NVIDIA NGX compatibility. NR can run before or after upscaling, with controls for lighting, detail and colour.
+This fork adds an AMD HIP backend to [wilsjo2's OptiScaler-DLSSNR](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass), retaining OptiScaler's upscaler routing, frame generation and NVIDIA NGX support. NR can run before or after upscaling, with adjustable model resolution, lighting, detail and colour.
 
-**Research project:** NR is working in Cyberpunk 2077 on an RX 6900 XT. A user test reached approximately 45 FPS at 1440p with XeFG frame generation, FSR 3 in Performance mode and NR at 75% before upscaling. This is a reported game result, rather than a controlled benchmark. DirectX 11 support has been checked in standalone tests.
+The project uses NVIDIA's NR networks with mixed INT8/FP16 execution on AMD. You supply the original model DLL; the installer prepares the models locally. This is a research project, tested on an RX 6900 XT in Cyberpunk 2077 and The Witcher 3 (DirectX 12).
 
-The original network is retained, with selected matrix operations in INT8 and the remaining paths in FP16. You supply the original model DLL; the installer prepares its weights locally.
+[Download r4-0.8.10](https://github.com/shakhbazian/OptiScaler-RDNA2NR/releases/tag/r4-0.8.10) · [Changelog](Changelog.md) · [Documentation](docs/README.md)
 
 ## Requirements
 
 For the AMD backend:
 
-| Requirement | What to install or provide |
+| Requirement | Details |
 | --- | --- |
-| Windows x64 | DirectX 12 support. |
-| A `gfx1030` Radeon GPU | RX 6900 XT; see [hardware compatibility](docs/COMPATIBILITY.md#hardware). |
-| AMD Software: Adrenalin Edition | Install the [Radeon RX 6000 driver](https://www.amd.com/en/support/download/drivers.html) with the HIP 6 runtime. |
-| Microsoft Visual C++ runtime, x64 | Install the [Visual C++ v14 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) ([x64 download](https://aka.ms/vc14/vc_redist.x64.exe)). |
-| DLSS 5 Neural Rendering 310.8.0.0 | Obtain `nvngx_dlssnr.dll` from a game that includes DLSS 5 Neural Rendering. Use the original build matching the [supported SHA-256](docs/MODEL.md#supported-source). |
-| A game with a supported upscaler input | OptiScaler must intercept the game's DLSS, FSR or XeSS calls. Use single-player games. |
+| Windows x64 | DirectX 12 support |
+| A `gfx1030` Radeon | RX 6900 XT is tested; see [hardware compatibility](docs/COMPATIBILITY.md#hardware) |
+| AMD graphics driver | [AMD Software: Adrenalin Edition for Radeon RX 6000](https://www.amd.com/en/support/download/drivers.html), including the HIP 6 runtime |
+| Visual C++ runtime, x64 | [Microsoft Visual C++ v14 Redistributable](https://aka.ms/vc14/vc_redist.x64.exe) |
+| A supported game input | DLSS, FSR or XeSS calls that OptiScaler can intercept; use single-player games |
 
-Allow space for the extracted release, about 278 MiB for the converted model, and backups of any files replaced in the game folder.
+### NR model DLL
+
+Provide an original `nvngx_dlssnr.dll` from a game that includes DLSS 5 Neural Rendering.
+
+| DLL version | Models included |
+| --- | --- |
+| 310.9.16.0 (recommended) | Models A and B |
+| 310.8.0.0 | Model A only |
+
+A is the original NR model; B is NVIDIA's newer, optimized model. On AMD, **Auto** selects B when available. The installer checks the source DLL and prepares its models automatically. See [model preparation](docs/MODEL.md) for supported file hashes and storage details.
+
+Allow space for the extracted release, about 494 MiB for both prepared models, and backups of replaced game files.
 
 ## Quick start
 
-1. Download the installer ZIP from [Releases](https://github.com/shakhbazian/OptiScaler-RDNA2NR/releases). Close the game and extract the complete archive into a separate folder.
-2. Run `Install-RDNA2NR.cmd`. Select the folder containing the game's actual executable and your original `nvngx_dlssnr.dll`. Keep `dxgi.dll` unless the game's installation guidance calls for another proxy. Click **Install / update**.
-3. Start the game and enable a supported in-game upscaler. FSR is a valid input on AMD.
-4. Press **Insert** and open **DLSS Neural Rendering**. NR is enabled in a fresh configuration, with **Auto** backend, **Standard**, **Model resolution** at 75%, **before upscaling**, one pass and **Apply model** enabled.
-5. Wait for model preparation. **AMD HIP (gfx1030)** identifies the backend; **RDNA2 NR active** with a growing frame count confirms that frames are being processed. Toggle NR to compare the image.
+1. Close the game. Download the installer ZIP from [Releases](https://github.com/shakhbazian/OptiScaler-RDNA2NR/releases/latest) and extract it completely.
+2. Run `Install-RDNA2NR.cmd`. Select the folder containing the game's actual executable and your original NR DLL. Keep the default `dxgi.dll` proxy unless the game's setup requires another name. Optionally select the [FSR 4.0.2c INT8 DLL](docs/INSTALLATION.md#optional-fsr-4-int8-on-rdna2), then click **Install / update**.
+3. Start the game and enable a supported in-game upscaler. For the default frame-generation route, also enable the game's native FSR frame generation.
+4. Press **Insert**, open **DLSS Neural Rendering**, and wait for model preparation. An increasing **RDNA2 NR active** frame count confirms processing. Use the NR switch to compare the result; choose A or B under **NR model**.
 
-To lower the network's working resolution while keeping the frame size, adjust **Model resolution**. At 50%, a 1080p NR input runs at 540p. See [settings](docs/SETTINGS.md#model-resolution) for placement and composition choices.
+A fresh installation enables NR with **Auto** model selection, **Standard** style, **75% Model resolution**, and placement **before upscaling**. It selects FSR 4 when available, otherwise FSR 3, and uses FSR 3.0 FG input → XeFG output with **Active** enabled. Updating preserves saved settings.
 
-The installer converts and verifies the model before replacing game files. It keeps an existing `OptiScaler.ini`, backs up replaced files, and reuses a verified model cache on subsequent installations. A fresh configuration selects FSR 4 when the loaded runtime offers it, otherwise FSR 3, and enables FSR 3.0 FG → XeFG for frame generation. To use this FG route, enable the game's native FSR frame generation. If you previously saved **Active** as off in OptiScaler's FG menu, enable it and save settings. Games with a different FG input need the matching source; **OptiFG (Upscaler)** is available for games without native FG. Save settings and restart after changing the FG source or output.
+For DirectX 11, select an upscaler marked **Dx12**, which uses OptiScaler's DirectX 12 bridge. See [installation](docs/INSTALLATION.md) for game setup, updates and removal, or [troubleshooting](docs/TROUBLESHOOTING.md) if NR is inactive.
 
-For DirectX 11, choose an upscaler marked **w/Dx12**; for example, `Dx11Upscaler=ffx_12` in the `[Upscalers]` section. See [installation](docs/INSTALLATION.md) for updates, removal and command-line use, or [troubleshooting](docs/TROUBLESHOOTING.md) if NR is inactive.
+## Adjusting NR
 
-**FSR 4 INT8 on RDNA2:** an optional FSR 4.0.2c INT8 runtime can be used with
-the HIP NR backend. Select its DLL in the installer; it is copied into the game
-folder and retained on updates. See [setup and verification](docs/INSTALLATION.md#optional-fsr-4-int8-on-rdna2).
+**Model resolution** controls the network's working size while preserving the output frame size. At 50%, a 1920×1080 NR input is processed at 960×540. At reduced sizes, **Enlargement** controls how its edit is transferred back; r4 adds optional Edge-aware and halo filters. See [settings](docs/SETTINGS.md).
 
-## Supported NR paths
-
-| Path | AMD HIP backend |
-| --- | --- |
-| DirectX 12 | One pass before or after upscaling |
-| DirectX 11 | Through OptiScaler's DirectX 12 upscaler bridge |
-| Vulkan | Not implemented for this backend |
-| Multipass, finished-picture, separate-edit or frame-hold modes | Not supported by the HIP backend |
-
-The NVIDIA NGX route remains available on supported NVIDIA hardware with a user-supplied runtime. AMD and NVIDIA do not have the same set of NR features. NR backend selection is independent of the selected upscaler and frame generator.
-
-NR processes the image at the selected stage and model scale. Running it before upscaling normally processes fewer pixels. Higher resolutions increase processing time and VRAM usage; large frames can exhaust the memory available alongside the game, upscaling and frame generation. See [compatibility and performance](docs/COMPATIBILITY.md).
+Higher NR resolutions increase processing time and VRAM use. Large frames can exhaust the memory available alongside the game, upscaling and frame generation. [Compatibility](docs/COMPATIBILITY.md) lists supported paths and game coverage; [NVIDIA setup](docs/NVIDIA.md) covers the NGX route.
 
 ## Documentation
 
 - [Install, update and uninstall](docs/INSTALLATION.md)
-- [NR settings and comparisons](docs/SETTINGS.md)
+- [NR settings](docs/SETTINGS.md)
 - [Model preparation and storage](docs/MODEL.md)
 - [Compatibility and performance](docs/COMPATIBILITY.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [How the integration works](docs/ARCHITECTURE.md)
+- [Architecture](docs/ARCHITECTURE.md)
 
 ## Build from source
 
-Install Git, PowerShell 7, Visual Studio's C++ desktop tools and Windows SDK, the v145 platform toolset with MSVC 14.44 binaries, and AMD HIP SDK 6.4. The scripts default to Visual Studio 18 Community and `C:\Program Files\AMD\ROCm\6.4`; see [build instructions](docs/BUILDING.md) for CMake, Python, paths and packaging requirements.
-
-From a checkout with its submodules initialized:
+Install Git, PowerShell 7, Visual Studio's C++ desktop tools and Windows SDK, the v145 platform toolset with MSVC 14.44 binaries, and AMD HIP SDK 6.4. The scripts default to Visual Studio 18 Community and `C:\Program Files\AMD\ROCm\6.4`. See [build instructions](docs/BUILDING.md) for dependencies, paths and release packaging.
 
 ```powershell
 git submodule update --init --recursive
@@ -75,10 +69,10 @@ git submodule update --init --recursive
 .\tools\Build-OptiScaler.ps1
 ```
 
-The outputs are `build/hip-gfx1030/dlssnr_hip_scheduled_bridge.dll` and `x64/Release/OptiScaler.dll`. A source build still needs locally prepared model weights to run NR.
+Outputs: `build/hip-gfx1030/dlssnr_hip_scheduled_bridge.dll` and `x64/Release/OptiScaler.dll`. Prepare model weights with the [converter](docs/MODEL.md#standalone-conversion).
 
 ## Origins and credits
 
-This is an unofficial fork of [wilsjo2's OptiScaler-DLSSNR](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass), built on [OptiScaler](https://github.com/optiscaler/OptiScaler) and earlier NR integration work by [Dagherbou](https://github.com/Dagherbou/OptiScaler_DLSSNR). OptiScaler began with [CyberFSR2](https://github.com/PotatoOfDoom/CyberFSR2); parts of the NR colour processing derive from [RenoDX](https://github.com/clshortfuse/renodx). See [credits](docs/CREDITS.md), [third-party notices](Licenses), and the [GPL-3.0 license](LICENSE). Model ownership is separate from the code license.
+This is an unofficial fork of [wilsjo2's OptiScaler-DLSSNR](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass), built on [OptiScaler](https://github.com/optiscaler/OptiScaler) and earlier NR work by [Dagherbou](https://github.com/Dagherbou/OptiScaler_DLSSNR). OptiScaler began with [CyberFSR2](https://github.com/PotatoOfDoom/CyberFSR2); parts of NR colour processing derive from [RenoDX](https://github.com/clshortfuse/renodx). See [credits](docs/CREDITS.md), [third-party notices](Licenses), and the [GPL-3.0 license](LICENSE). Model ownership is separate from the code license.
 
-For OptiScaler's general features and game-specific advice, use the [upstream wiki](https://github.com/optiscaler/OptiScaler/wiki) and [community Discord](https://discord.gg/wEyd9w4hG5). Support upstream development through [cdozdil](https://github.com/sponsors/cdozdil?frequency=one-time) or [nitec](https://buymeacoffee.com/nitec).
+For general OptiScaler features and game-specific advice, use the [upstream wiki](https://github.com/optiscaler/OptiScaler/wiki) and [community Discord](https://discord.gg/wEyd9w4hG5). Support upstream development through [cdozdil](https://github.com/sponsors/cdozdil?frequency=one-time) or [nitec](https://buymeacoffee.com/nitec).

@@ -47,6 +47,8 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
             ParkNrResource(nr.colorCopy);
             ParkNrResource(nr.hdrCopy);
             ParkNrResource(nr.colorSmall);
+            ParkNrResource(nr.depthSmall);
+            ParkNrResource(nr.motionSmall);
             ParkNrResource(nr.outputNative);
             ParkNrResource(nr.activeColor);
             nr.passScratchFailed = false;
@@ -92,19 +94,21 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
         return false;
     }
 
+    const bool needsClamp = requestedPasses > 1 || DlssNr_Common::HaloEnabled(cfg);
     if (requestedPasses == 1)
-    {
-        // Reclaim the extra raster and clear its failure latch. Raising the count later gets one fresh
-        // allocation attempt; holding a failing allocation at two must not retry it every frame.
         ParkNrResource(nr.passScratch);
+    if (!needsClamp)
+    {
         ParkNrResource(nr.passClamp);
         nr.passScratchFailed = false;
     }
-    else if (nr.passScratch == nullptr && !nr.passScratchFailed)
+    else if (!nr.passScratchFailed && (nr.passClamp == nullptr || (requestedPasses > 1 && nr.passScratch == nullptr)))
     {
-        nr.passScratch = CreateScratch(device, modelFormat, workWidth, workHeight);
-        nr.passClamp = CreateScratch(device, modelFormat, workWidth, workHeight);
-        nr.passScratchFailed = nr.passScratch == nullptr || nr.passClamp == nullptr;
+        if (requestedPasses > 1 && nr.passScratch == nullptr)
+            nr.passScratch = CreateScratch(device, modelFormat, workWidth, workHeight);
+        if (nr.passClamp == nullptr)
+            nr.passClamp = CreateScratch(device, modelFormat, workWidth, workHeight);
+        nr.passScratchFailed = (requestedPasses > 1 && nr.passScratch == nullptr) || nr.passClamp == nullptr;
         if (nr.passScratchFailed)
         {
             ParkNrResource(nr.passScratch);
@@ -112,7 +116,8 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
         }
 
         if (nr.passScratchFailed)
-            LOG_ERROR("DLSS-NR: could not allocate the multipass textures; extra passes are disabled");
+            LOG_ERROR(
+                "DLSS-NR: could not allocate filter/multipass textures; halo filtering and extra passes are disabled");
     }
 
     if (reduced && !spatial && nr.colorSmall == nullptr)

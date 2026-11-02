@@ -49,7 +49,6 @@ From an x64 Visual Studio developer PowerShell:
 msbuild OptiScaler.sln /m /p:Configuration=Release /p:Platform=x64 /p:PostBuildEventUseInBuild=false
 ./tests/dlssnr_proxy/run.ps1
 ./tests/run_nr_gpu_lifetime.ps1
-./tests/run_nr_pipeline_capture.ps1
 ./tests/run_nr_private_upscaler_smoke.ps1
 ```
 

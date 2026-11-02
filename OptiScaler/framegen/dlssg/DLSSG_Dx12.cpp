@@ -101,10 +101,6 @@ bool DLSSG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQ
         StreamlineProxy::UpgradeInterface()((void**) &factory);
         DxgiFactoryHooks::HookToDLSSGFactory(factory);
     }
-    else
-    {
-        slFactory->Release();
-    }
 
     StreamlineProxy::SetFeatureLoaded()(sl::kFeatureDLSS_G, true);
 
@@ -124,7 +120,7 @@ bool DLSSG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQ
         result = factory->CreateSwapChain(cmdQueue, desc, swapChain);
     }
 
-    if (result != S_OK)
+    if (FAILED(result) || !swapChain || !*swapChain)
     {
         LOG_ERROR("CreateSwapChain error: {:X}", (UINT) result);
         return false;
@@ -222,10 +218,6 @@ bool DLSSG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmd
             StreamlineProxy::UpgradeInterface()((void**) &factory);
             DxgiFactoryHooks::HookToDLSSGFactory(factory);
         }
-        else
-        {
-            slFactory->Release();
-        }
 
         IDXGIFactory2* factory2 = nullptr;
         if (factory->QueryInterface(IID_PPV_ARGS(&factory2)) != S_OK)
@@ -244,7 +236,7 @@ bool DLSSG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmd
         factory2->Release();
         factory2 = nullptr;
 
-        if (result != S_OK)
+        if (FAILED(result) || !swapChain || !*swapChain)
         {
             LOG_ERROR("CreateSwapChain error: {:X}", (UINT) result);
             return false;

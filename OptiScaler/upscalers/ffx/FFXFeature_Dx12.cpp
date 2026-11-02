@@ -13,13 +13,27 @@ NVSDK_NGX_Parameter* FFXFeatureDx12::SetParameters(NVSDK_NGX_Parameter* InParame
     return InParameters;
 }
 
-FFXFeatureDx12::FFXFeatureDx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters)
+FFXFeatureDx12::FFXFeatureDx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters,
+                               const std::string& customUpscaler)
     : FFXFeature(InHandleId, InParameters), IFeature_Dx12(InHandleId, InParameters),
       IFeature(InHandleId, SetParameters(InParameters))
 {
+    // Regular dlls go first, so their name lookups don't find the custom dll
     FfxApiProxy::InitFfxDx12();
 
-    _moduleLoaded = FfxApiProxy::IsSRReady();
+    if (customUpscaler.empty())
+    {
+        _moduleLoaded = FfxApiProxy::IsSRReady();
+    }
+    else
+    {
+        _customUpscaler = FfxApiProxy::LoadCustomUpscalerDx12(customUpscaler);
+        _moduleLoaded = _customUpscaler != nullptr;
+
+        if (!_moduleLoaded)
+            ImGui::InsertNotification(
+                { ImGuiToastType::Error, 10000, "Can't load custom upscaler %s", customUpscaler.c_str() });
+    }
 
     if (_moduleLoaded)
         LOG_INFO("amd_fidelityfx_dx12.dll methods loaded!");
@@ -643,8 +657,9 @@ bool FFXFeatureDx12::InitFFX(const NVSDK_NGX_Parameter* InParameters)
     {
         ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
 
-        QueryVersionsDx12(Device);
-        if (State::Instance().ffxUpscalerVersionIds.empty())
+        auto& versions = _customUpscaler ? _customUpscaler->versions : State::Instance().ffxUpscalerVersionsDx12;
+        auto& upscalerIndex = Config::Instance()->FfxUpscalerIndexFor(_customUpscaler ? _customUpscaler->name : "");
+        if (!QueryVersionsDx12(Device, _customUpscaler) || versions.ids.empty())
         {
             LOG_WARN("No FSR upscaler provider available for this device");
             return false;
@@ -658,14 +673,15 @@ bool FFXFeatureDx12::InitFFX(const NVSDK_NGX_Parameter* InParameters)
 
         _contextDesc.header.pNext = &backendDesc.header;
 
-        if (Config::Instance()->FfxUpscalerIndex.value_or_default() < 0 ||
-            Config::Instance()->FfxUpscalerIndex.value_or_default() >= State::Instance().ffxUpscalerVersionIds.size())
-            Config::Instance()->FfxUpscalerIndex.set_volatile_value(0);
+        if (upscalerIndex.value_or_default() < 0 ||
+            upscalerIndex.value_or_default() >=
+                versions.ids.size())
+            upscalerIndex.set_volatile_value(0);
 
         ffxOverrideVersion override = { 0 };
         override.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
         override.versionId =
-            State::Instance().ffxUpscalerVersionIds[Config::Instance()->FfxUpscalerIndex.value_or_default()];
+            versions.ids[upscalerIndex.value_or_default()];
         backendDesc.header.pNext = &override.header;
 
         LOG_DEBUG("_createContext!");
@@ -673,7 +689,10 @@ bool FFXFeatureDx12::InitFFX(const NVSDK_NGX_Parameter* InParameters)
         {
             ScopedSkipHeapCapture skipHeapCapture {};
 
-            auto ret = FfxApiProxy::D3D12_CreateContext(&_context, &_contextDesc.header, NULL);
+            auto ret =
+                _customUpscaler != nullptr
+                    ? FfxApiProxy::D3D12_CreateContext(&_customUpscaler->module, &_context, &_contextDesc.header, NULL)
+                    : FfxApiProxy::D3D12_CreateContext(&_context, &_contextDesc.header, NULL);
 
             if (ret != FFX_API_RETURN_OK)
             {
@@ -683,7 +702,7 @@ bool FFXFeatureDx12::InitFFX(const NVSDK_NGX_Parameter* InParameters)
         }
 
         auto version =
-            State::Instance().ffxUpscalerVersionNames[Config::Instance()->FfxUpscalerIndex.value_or_default()];
+            versions.names[upscalerIndex.value_or_default()];
         _name = "FSR";
         parse_version(version);
         LOG_INFO("FSR upscaler version: {}",version);

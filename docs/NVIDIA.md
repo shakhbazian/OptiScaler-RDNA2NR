@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Compatibility](COMPATIBILITY.md)
 
-The frontend retains the ordinary NVIDIA NGX route. This is separate from the AMD HIP executor: it uses the installed NVIDIA driver's NGX core and a user-supplied `nvngx_dlssnr.dll`. A supported model runtime, driver and GPU combination is still required. AMD testing does not qualify that combination.
+The NVIDIA route uses the installed driver's NGX core and a user-supplied `nvngx_dlssnr.dll` compatible with the GPU and driver.
 
 ## Manual setup
 
@@ -17,6 +17,10 @@ The AMD GUI installer does not perform this setup: it requires the supported ori
 The integrated NGX path does not require the obsolete `nvngx.dll_dlssnr.dll` forwarder. General OptiScaler loaders and a game's genuine NGX/DLSS files serve other purposes; do not remove them indiscriminately.
 
 ## Scope
+
+NR DLL 310.9.16.0 is recommended and contains models A and B; 310.8.0.0 contains
+only A. In the NVIDIA menu, **Original** selects A and **Optimized** selects B.
+**Automatic** follows the runtime's default choice.
 
 The standard build excludes experimental NVIDIA hybrid/NVFP4 and RTX 40 MFG-unlock implementations. It does not unlock the original runtime for unsupported NVIDIA cards. Menu options and capabilities differ between NGX and HIP.
 

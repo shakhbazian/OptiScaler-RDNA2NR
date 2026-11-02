@@ -328,6 +328,9 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framegen\nvngx\Nvngx_Combo.h" />
+    <ClInclude Include="fsr4\FSR4DriverProvider.h" />
+    <ClInclude Include="fsr4\FSR4Models.h" />
+    <ClInclude Include="fsr4\FSR4Presets.h" />
     <ClInclude Include="fsr4\FSR4Upgrade.h" />
     <ClInclude Include="gpu_time\GpuTime_Dx11.h" />
     <ClInclude Include="gpu_time\GpuTime_Dx12.h" />
@@ -360,7 +363,6 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="framegen\FGTransitionTrace.h" />
     <ClInclude Include="framegen\IFGFeature_Dx12.h" />
     <ClInclude Include="framegen\nvngx\Nvngx_FG.h" />
-    <ClInclude Include="fsr4\FSR4ModelSelection.h" />
     <ClInclude Include="fsr4\WatermarkEnvironment.h" />
     <ClInclude Include="hooks\D3D12_Hooks.h" />
     <ClInclude Include="hooks\DxgiFactory_Hooks.h" />
@@ -557,6 +559,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="upscalers\FeatureProvider_Dx11.h" />
     <ClInclude Include="upscalers\FeatureProvider_Dx12.h" />
     <ClInclude Include="upscalers\FeatureProvider_Vk.h" />
+    <ClInclude Include="upscalers\CustomUpscalers.h" />
     <ClInclude Include="upscalers\ffx\FFXFeature.h" />
     <ClInclude Include="upscalers\fsr31\FSR31Feature_Dx11.h" />
     <ClInclude Include="upscalers\ffx\FFXFeature_Dx11On12.h" />
@@ -613,6 +616,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="rcas\RCAS_Dx12.h" />
     <ClInclude Include="hooks\Reflex_Hooks.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="scanner\rtti.h" />
     <ClInclude Include="scanner\scanner.h" />
     <ClInclude Include="shaders\bias\Bias_Common.h" />
     <ClInclude Include="shaders\bias\Bias_Dx11.h" />
@@ -648,6 +652,9 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="framegen\nvngx\Nvngx_Combo.cpp" />
+    <ClCompile Include="fsr4\FSR4DriverProvider.cpp" />
+    <ClCompile Include="fsr4\FSR4Models.cpp" />
+    <ClCompile Include="fsr4\FSR4Presets.cpp" />
     <ClCompile Include="fsr4\FSR4Upgrade.cpp" />
     <ClCompile Include="gpu_time\GpuTime_Dx11.cpp" />
     <ClCompile Include="gpu_time\GpuTime_Dx12.cpp" />
@@ -663,7 +670,6 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="framegen\IFGFeature.cpp" />
     <ClCompile Include="framegen\IFGFeature_Dx12.cpp" />
     <ClCompile Include="framegen\nvngx\Nvngx_FG.cpp" />
-    <ClCompile Include="fsr4\FSR4ModelSelection.cpp" />
     <ClCompile Include="hooks\D3D12_Hooks.cpp" />
     <ClCompile Include="hooks\DxgiFactory_Hooks.cpp" />
     <ClCompile Include="hooks\DxgiFactory_WrappedCalls.cpp" />
@@ -887,13 +893,12 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="shaders\dlssnr\DlssNr_Dx12.cpp" />
     <ClInclude Include="shaders\dlssnr\DlssNr_ActiveColor.h" />
     <ClInclude Include="dlssnr\WorkingResolution.h"></ClInclude>
+    <ClInclude Include="dlssnr\ModelGuideContract.h"></ClInclude>
     <ClCompile Include="shaders\dlssnr\DlssNr_Vk.cpp" />
     <ClCompile Include="dlssnr\DlssNrFeature_Vk.cpp" />
     <ClCompile Include="dlssnr\DlssNrFinished_Vk.cpp" />
     <ClCompile Include="dlssnr\DlssNr_Proxy.cpp" />
-    <ClCompile Include="dlssnr\native\NativeAdapter.cpp">
-      <PreprocessorDefinitions Condition="'$(NrNativeTestHooks)'=='true'">NR_NATIVE_TEST_HOOKS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-    </ClCompile>
+    <ClCompile Include="dlssnr\native\NativeAdapter.cpp" />
     <ClCompile Include="dlssnr\native\NativeSession.cpp" />
     <ClCompile Include="dlssnr\NrBackendSelection.cpp" />
     <ClCompile Include="dlssnr\DlssNr_Menu.cpp" />
@@ -907,6 +912,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="upscalers\xess\XeSSFeature_Dx11on12.cpp" />
     <ClCompile Include="upscalers\xess\XeSSFeature_Dx12.cpp" />
     <ClInclude Include="upscalers\xess\XeSSFeature_Dx12.h" />
+    <ClCompile Include="scanner\rtti.cpp" />
     <ClCompile Include="scanner\scanner.cpp" />
     <ClCompile Include="shaders\bias\Bias_Dx11.cpp" />
     <ClCompile Include="shaders\bias\Bias_Dx12.cpp" />
@@ -930,6 +936,12 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <None Include="shaders\magnifier\precompile\Magnifier_Shader_Vk.spv" />
     <None Include="Source.def" />
   </ItemGroup>
+  <!-- The hook hub is inline: diagnostic definitions must agree in every TU. -->
+  <ItemDefinitionGroup Condition="'$(NrNativeTestHooks)'=='true'">
+    <ClCompile>
+      <PreprocessorDefinitions>NR_NATIVE_TEST_HOOKS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
@@ -946,10 +958,8 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="dlssnr\DlssNr.h" />
-    <ClInclude Include="dlssnr\DlssNr_Capture.h" />
     <ClInclude Include="dlssnr\DlssNr_Readback.h" />
     <ClInclude Include="dlssnr\DlssNr_Image_Vk.h" />
-    <ClInclude Include="dlssnr\DlssNr_PipelineCapture.h" />
     <ClCompile Include="dlssnr\DlssNr_GpuLifetime.cpp" />
     <ClInclude Include="dlssnr\DlssNr_GpuLifetime.h" />
     <ClInclude Include="dlssnr\DlssNr_HoldParameters_Dx12.h" />

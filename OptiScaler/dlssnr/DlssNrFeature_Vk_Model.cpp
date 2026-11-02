@@ -183,6 +183,8 @@ void ModelVk::Impl::Shutdown()
     state.passClamp.Destroy(state.device);
     state.proxy.Destroy(state.device);
     state.proxySmall.Destroy(state.device);
+    state.depthSmall.Destroy(state.device);
+    state.motionSmall.Destroy(state.device);
     state.spatialProxy.Destroy(state.device);
     state.spatialDepth.Destroy(state.device);
     state.spatialMotion.Destroy(state.device);
@@ -306,6 +308,8 @@ bool ModelVk::Impl::PrepareModels(VkCommandBuffer cmdBuffer, const DlssNrFrameIn
         const VkFormat working = VK_FORMAT_R16G16B16A16_SFLOAT;
 
         state.proxySmall.Destroy(state.device);
+        state.depthSmall.Destroy(state.device);
+        state.motionSmall.Destroy(state.device);
         state.spatialProxy.Destroy(state.device);
         state.spatialDepth.Destroy(state.device);
         state.spatialMotion.Destroy(state.device);
@@ -317,6 +321,8 @@ bool ModelVk::Impl::PrepareModels(VkCommandBuffer cmdBuffer, const DlssNrFrameIn
         // output is the model's target, so it is the working size. proxy and keep are full: proxy is
         // the source the downsample reads, keep is the untouched frame the resolve composites onto.
         // outputNative is the native buffer the supersample down-leg averages the answer into.
+        state.guideAllocationTried = false;
+        state.haloAllocationTried = false;
         const bool ok = CreateImage(state.output, workWidth, workHeight, working) &&
                         (passes == 1 || (CreateImage(state.scratch, workWidth, workHeight, working) &&
                                          CreateImage(state.passClamp, workWidth, workHeight, working))) &&
@@ -356,6 +362,22 @@ bool ModelVk::Impl::PrepareModels(VkCommandBuffer cmdBuffer, const DlssNrFrameIn
         for (unsigned int pass = 0; pass < passes; ++pass)
             state.builtSettings[pass] = Profiles::PassSettings(cfg, pass);
         state.reset = true;
+    }
+
+    // Optional guide/filter storage can fail without discarding a valid model.
+    // Retry after resize, where failed allocations and old GPU users retire.
+    if (cfg.DlssNrMatchGuides.value_or_default() && reduced && workWidth < width && !state.guideAllocationTried)
+    {
+        state.guideAllocationTried = true;
+        if (!CreateImage(state.depthSmall, workWidth, workHeight, VK_FORMAT_R32_SFLOAT) ||
+            !CreateImage(state.motionSmall, workWidth, workHeight, VK_FORMAT_R32G32B32A32_SFLOAT))
+            LOG_WARN("NR matched guides unavailable; using original guides");
+    }
+    if (DlssNr_Common::HaloEnabled(cfg) && !state.passClamp.Valid() && !state.haloAllocationTried)
+    {
+        state.haloAllocationTried = true;
+        if (!CreateImage(state.passClamp, workWidth, workHeight, VK_FORMAT_R16G16B16A16_SFLOAT))
+            LOG_WARN("NR halo filter unavailable; using the unfiltered model output");
     }
 
     bool created = false;

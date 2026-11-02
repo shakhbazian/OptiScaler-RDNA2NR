@@ -363,8 +363,6 @@ void DxgiFactoryHooks::HookToDLSSGFactory(IDXGIFactory* pFactory)
     if (!Util::CheckForRealObject(__FUNCTION__, pFactory, (IUnknown**) &real))
         return;
 
-    real->Release();
-
     LOG_FUNC();
 
     void** pFactoryVTable = *reinterpret_cast<void***>(pFactory);
@@ -708,7 +706,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
             State::Instance().skipDxgiLoadChecks = false;
         }
 
-        if (result == S_OK)
+        if (SUCCEEDED(result) && ppSwapChain != nullptr && *ppSwapChain != nullptr)
         {
             if (sizeToWindow)
             {
@@ -1127,7 +1125,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
             State::Instance().skipDxgiLoadChecks = false;
         }
 
-        if (result == S_OK)
+        if (SUCCEEDED(result) && ppSwapChain != nullptr && *ppSwapChain != nullptr)
         {
             State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
 
@@ -1258,7 +1256,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForCoreWindow(IDXGIFactory2* realFactor
             o_CreateSwapChainForCoreWindow(realFactory, pDevice, pWindow, &localDesc, pRestrictToOutput, ppSwapChain);
     }
 
-    if (result == S_OK)
+    if (SUCCEEDED(result) && ppSwapChain != nullptr && *ppSwapChain != nullptr)
     {
         // check for SL proxy
         IDXGISwapChain* realSC = nullptr;
@@ -1581,7 +1579,7 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChain(IDXGIFactory* realFactory, IUnkno
             State::Instance().skipDxgiLoadChecks = false;
         }
 
-        if (result == S_OK)
+        if (SUCCEEDED(result) && ppSwapChain != nullptr && *ppSwapChain != nullptr)
         {
             State::Instance().currentSwapchainDesc = localDesc;
 
@@ -1900,7 +1898,7 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForHwnd(IDXGIFactory2* realFactory
             State::Instance().skipDxgiLoadChecks = false;
         }
 
-        if (result == S_OK)
+        if (SUCCEEDED(result) && ppSwapChain != nullptr && *ppSwapChain != nullptr)
         {
             // check for SL proxy
             IDXGISwapChain1* realSC = nullptr;
@@ -2029,7 +2027,7 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForCoreWindow(IDXGIFactory2* realF
                                                           ppSwapChain);
     }
 
-    if (result == S_OK)
+    if (SUCCEEDED(result) && ppSwapChain != nullptr && *ppSwapChain != nullptr)
     {
         // check for SL proxy
         IDXGISwapChain* realSC = nullptr;

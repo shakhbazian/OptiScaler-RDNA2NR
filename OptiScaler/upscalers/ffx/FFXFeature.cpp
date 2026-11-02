@@ -3,6 +3,10 @@
 #include "FFXFeature.h"
 #include "FfxProviderSelection.h"
 #include <proxies/FfxApi_Proxy.h>
+#include <proxies/Dxgi_Proxy.h>
+#include <proxies/D3d12_Proxy.h>
+#include <misc/IdentifyGpu.h>
+#include <fsr4/FSR4DriverProvider.h>
 
 static void FfxLogCallback(uint32_t type, const wchar_t* message)
 {
@@ -18,8 +22,10 @@ double FFXFeature::GetDeltaTime()
     return deltaTime;
 }
 
-void FFXFeature::QueryVersionsDx12(ID3D12Device* device)
+bool FFXFeature::QueryVersionsDx12(ID3D12Device* device, CustomFfxModule* custom)
 {
+    auto& versions = custom != nullptr ? custom->versions : State::Instance().ffxUpscalerVersionsDx12;
+
     // Get number of versions for allocation
     ffxQueryDescGetVersions versionQuery {};
     versionQuery.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
@@ -27,32 +33,61 @@ void FFXFeature::QueryVersionsDx12(ID3D12Device* device)
     versionQuery.device = device;
     uint64_t versionCount = 0;
     versionQuery.outputCount = &versionCount;
-    FfxApiProxy::D3D12_Query(nullptr, &versionQuery.header);
+
+    auto query = [&] { return custom ? custom->module.Query(nullptr, &versionQuery.header) : FfxApiProxy::D3D12_QueryUpscalerVersions(&versionQuery, FSR4DriverProvider::Listing::Always); };
+    if (query() != FFX_API_RETURN_OK)
+        return false;
 
     // Fill version ids and names arrays
-    State::Instance().ffxUpscalerVersionIds.resize(versionCount);
-    State::Instance().ffxUpscalerVersionNames.resize(versionCount);
-    versionQuery.versionIds = State::Instance().ffxUpscalerVersionIds.data();
-    versionQuery.versionNames = State::Instance().ffxUpscalerVersionNames.data();
-    FfxApiProxy::D3D12_Query(nullptr, &versionQuery.header);
+    versions.ids.resize(versionCount);
+    versions.names.resize(versionCount);
+    versionQuery.versionIds = versions.ids.data();
+    versionQuery.versionNames = versions.names.data();
 
-    for (size_t i = 0; i < State::Instance().ffxUpscalerVersionNames.size(); ++i)
+    if (query() != FFX_API_RETURN_OK) { versions.ids.clear(); versions.names.clear(); return false; }
+    versions.ids.resize(versionCount);
+    versions.names.resize(versionCount);
+    versions.OwnNames();
+    auto cfg = Config::Instance();
+    auto& index = cfg->FfxUpscalerIndexFor(custom ? custom->name : "");
+    if (!custom)
     {
-        const auto* name = State::Instance().ffxUpscalerVersionNames[i];
-        LOG_INFO("FSR upscaler option {}: {}", i, name != nullptr ? name : "unknown");
+        int selected = -1;
+        if (auto id = cfg->FfxProviderId.value_or(""); !id.empty())
+            selected = FindFsrProvider(versions.ids, std::strtoull(id.c_str(), nullptr, 10));
+        else if (index.value_for_config().has_value())
+        {
+            // Older configs index only the SDK list. The newly inserted driver
+            // entry must not reinterpret a saved SDK index as a driver choice.
+            int sdkIndex = 0;
+            for (size_t i = 0; i < versions.ids.size(); ++i)
+                if (FfxApiProxy::UpscalerModule(versions.ids[i]) != FSR4DriverProvider::LoadedModule())
+                {
+                    if (sdkIndex++ == index.value_for_config().value()) { selected = static_cast<int>(i); break; }
+                }
+            if (selected >= 0) cfg->FfxProviderId = std::to_string(versions.ids[selected]);
+        }
+        if (selected < 0)
+        {
+            selected = PreferredFsrProvider(versions.names);
+            // Keep the installer-managed 4.0.2 INT8 module ahead of a driver
+            // reporting the same version. Other choices use their stable id.
+            for (size_t i = 0; i < versions.names.size(); ++i)
+                if (std::string_view(versions.names[i]).starts_with("4.0.2") &&
+                    FfxApiProxy::UpscalerModule(versions.ids[i]) == FfxApiProxy::Dx12Module_SR())
+                { selected = static_cast<int>(i); break; }
+        }
+        index.set_volatile_value(selected);
     }
-
-    // Prefer FSR 4 when the loaded runtime offers it. Keep explicit user choices.
-    auto& index = Config::Instance()->FfxUpscalerIndex;
-    if (!index.has_value())
-    {
-        const auto& names = State::Instance().ffxUpscalerVersionNames;
-        index.set_volatile_value(PreferredFsrProvider(names));
-    }
+    else if (!index.has_value() || index.value() < 0 || index.value() >= versions.ids.size())
+        index.set_volatile_value(PreferredFsrProvider(versions.names));
+    return true;
 }
 
-void FFXFeature::QueryVersionsVulkan()
+bool FFXFeature::QueryVersionsVulkan()
 {
+    auto& versions = State::Instance().ffxUpscalerVersionsVk;
+
     // Get number of versions for allocation
     ffxQueryDescGetVersions versionQuery {};
     versionQuery.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
@@ -60,14 +95,106 @@ void FFXFeature::QueryVersionsVulkan()
     // versionQuery.device = Device; // only for DirectX 12 applications
     uint64_t versionCount = 0;
     versionQuery.outputCount = &versionCount;
-    FfxApiProxy::VULKAN_Query()(nullptr, &versionQuery.header);
+
+    if (FfxApiProxy::VULKAN_Query()(nullptr, &versionQuery.header) != FFX_API_RETURN_OK)
+        return false;
 
     // Fill version ids and names arrays
-    State::Instance().ffxUpscalerVersionIds.resize(versionCount);
-    State::Instance().ffxUpscalerVersionNames.resize(versionCount);
-    versionQuery.versionIds = State::Instance().ffxUpscalerVersionIds.data();
-    versionQuery.versionNames = State::Instance().ffxUpscalerVersionNames.data();
-    FfxApiProxy::VULKAN_Query()(nullptr, &versionQuery.header);
+    versions.ids.resize(versionCount);
+    versions.names.resize(versionCount);
+    versionQuery.versionIds = versions.ids.data();
+    versionQuery.versionNames = versions.names.data();
+
+    if (FfxApiProxy::VULKAN_Query()(nullptr, &versionQuery.header) != FFX_API_RETURN_OK) { versions.ids.clear(); versions.names.clear(); return false; }
+    versions.ids.resize(versionCount); versions.names.resize(versionCount); versions.OwnNames();
+    return true;
+}
+
+void FFXFeature::EnsureVersionsDx12()
+{
+    static bool queryTried = false;
+
+    if (queryTried || !State::Instance().ffxUpscalerVersionsDx12.names.empty())
+        return;
+
+    queryTried = true;
+
+    FfxApiProxy::InitFfxDx12();
+
+    if (!FfxApiProxy::IsSRReady(false))
+        return;
+
+    ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
+
+    // The device is used for filtering out unsupported upscalers (FSR4)
+    auto device = State::Instance().currentD3D12Device;
+    ID3D12Device* tempDevice = nullptr;
+
+    // DX11 / Vulkan before any w/Dx12 upscaler got created
+    if (device == nullptr)
+    {
+        ScopedSkipVulkanHooks skipVulkanHooks {};
+        ScopedCreatingD3DDevice creatingD3DDevice {};
+
+        IDXGIFactory2* factory = nullptr;
+        HRESULT result;
+
+        if (DxgiProxy::Module() == nullptr)
+            result = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
+        else
+            result = DxgiProxy::CreateDxgiFactory2_()(0, __uuidof(factory), &factory);
+
+        if (result != S_OK || factory == nullptr)
+        {
+            LOG_ERROR("Can't create factory: {:X}", (UINT) result);
+            return;
+        }
+
+        IDXGIAdapter* hwAdapter = nullptr;
+        IdentifyGpu::getHardwareAdapter(factory, &hwAdapter, D3D_FEATURE_LEVEL_12_0);
+
+        if (D3d12Proxy::Module() == nullptr)
+            result = D3D12CreateDevice(hwAdapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&tempDevice));
+        else
+            result = D3d12Proxy::D3D12CreateDevice_()(hwAdapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&tempDevice));
+
+        if (hwAdapter != nullptr)
+            hwAdapter->Release();
+
+        factory->Release();
+
+        if (result != S_OK || tempDevice == nullptr)
+        {
+            LOG_ERROR("Can't create temp D3D12 device: {:X}", (UINT) result);
+            return;
+        }
+
+        device = tempDevice;
+    }
+
+    if (!QueryVersionsDx12(device))
+        LOG_ERROR("Querying FFX DX12 upscaler versions failed");
+
+    if (tempDevice != nullptr)
+        tempDevice->Release();
+}
+
+void FFXFeature::EnsureVersionsVulkan()
+{
+    static bool queryTried = false;
+
+    if (queryTried || !State::Instance().ffxUpscalerVersionsVk.names.empty())
+        return;
+
+    queryTried = true;
+
+    if (!FfxApiProxy::InitFfxVk())
+        return;
+
+    ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
+
+    if (!QueryVersionsVulkan())
+        LOG_ERROR("Querying FFX Vulkan upscaler versions failed");
 }
 
 void FFXFeature::InitFlags()

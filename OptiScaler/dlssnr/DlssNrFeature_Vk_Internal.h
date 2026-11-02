@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 
 #include "DlssNrFeature_Vk.h"
 #include "DlssNr_Image_Vk.h"
@@ -41,6 +42,8 @@ struct VkState
     ImageVk output;
     ImageVk scratch;
     ImageVk passClamp;
+    bool guideAllocationTried = false;
+    bool haloAllocationTried = false;
     ImageVk proxy;
     ImageVk keep;
     ImageVk exposureMeter;
@@ -52,6 +55,13 @@ struct VkState
     // cost -- then runs on this instead of the full proxy, which is the whole point of the working
     // scale slider. Unused (and never created) at scale 1, so the default path is unchanged.
     ImageVk proxySmall;
+
+    // Below-native working size, MatchGuides: depth and motion resampled to the working size so
+    // the model's guides agree with the colour it is given (R32F, and RGBA32F for motion since RG32F
+    // storage writes need shaderStorageImageExtendedFormats; NGX reads xy). The D3D12 path's
+    // depthSmall / motionSmall. Never created at scale >= 1.
+    ImageVk depthSmall;
+    ImageVk motionSmall;
 
     // Spatial compression has its own packed model input and typed packed guides. Vulkan
     // stores motion in RGBA32F to avoid requiring shaderStorageImageExtendedFormats for
@@ -91,6 +101,9 @@ struct VkState
     uint32_t workWidth = 0;
     uint32_t workHeight = 0;
     bool reset = true;
+    bool guideContractValid = false;
+    std::array<unsigned,14> guideContract{};
+    std::array<float,2> guideMotionScale{};
     unsigned long long frames = 0;
 
     // Timing. A pair of timestamps per frame across a ring, read back three frames later: a query
@@ -111,6 +124,7 @@ struct ModelVk::Impl
     VkState state;
     bool reported = false;
     bool warnedVkSuper = false;
+    bool warnedMatchGuides = false;
     bool saidEncoding = false;
     bool warnedDeferred = false;
     std::mutex mutex;

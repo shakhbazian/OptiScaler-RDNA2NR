@@ -1,0 +1,126 @@
+{
+  "date": "2026-10-17T22:21:33.6475695+03:00",
+  "checks": [
+    {
+      "passed": true,
+      "name": "A/standard"
+    },
+    {
+      "passed": true,
+      "name": "B/standard"
+    },
+    {
+      "passed": true,
+      "name": "B720/standard"
+    },
+    {
+      "passed": true,
+      "name": "B75/standard"
+    },
+    {
+      "passed": true,
+      "name": "B/pan_jitter"
+    },
+    {
+      "passed": true,
+      "name": "B/queue_switch"
+    },
+    {
+      "passed": true,
+      "name": "B/resize"
+    },
+    {
+      "passed": true,
+      "name": "B/wrapper"
+    },
+    {
+      "passed": true,
+      "name": "B/rgba8"
+    },
+    {
+      "passed": true,
+      "name": "B/rgba32"
+    },
+    {
+      "passed": true,
+      "name": "B/r11"
+    },
+    {
+      "passed": true,
+      "name": "B/hdr"
+    },
+    {
+      "passed": true,
+      "name": "B/exposure"
+    },
+    {
+      "passed": true,
+      "name": "B/apply_off"
+    },
+    {
+      "passed": true,
+      "name": "B/subrect_bypass"
+    },
+    {
+      "passed": true,
+      "name": "B/paced_stream"
+    },
+    {
+      "passed": true,
+      "name": "B4K/standard"
+    },
+    {
+      "passed": true,
+      "name": "B/DX11/post=False"
+    },
+    {
+      "passed": true,
+      "name": "B/DX11/post=True"
+    },
+    {
+      "passed": true,
+      "name": "B/failures"
+    },
+    {
+      "passed": true,
+      "name": "B/private/model_cycle"
+    },
+    {
+      "passed": true,
+      "name": "B/private/controls"
+    },
+    {
+      "passed": true,
+      "name": "B/private/toggle"
+    },
+    {
+      "passed": true,
+      "name": "B/private/temporal_toggle"
+    },
+    {
+      "passed": true,
+      "name": "B/private/scale_cycle"
+    }
+  ],
+  "frontendSha256": "2B9A715FC7CE998B14215C4B7795ABF72B1A8C2C7B69575DAA61952CFC85F5D1",
+  "companionSha256": "BA229B2603C9A47C1237ACA6DDF4766A5EB79A71124C02F9683188BA459C0E60",
+  "sourceBaseCommit": "4c3ea6f",
+  "executionProfile": "model-a-release-b-balanced-20261017",
+  "profileId": "0x20261017",
+  "windowsPowerShell51InstallerRegression": true,
+  "portablePythonRealConversionAndInstall": true,
+  "installedModelGraphs": [
+    1,
+    2
+  ],
+  "liveSwitchWithFullPipelineReset": {
+    "bFirst": "7626F42ADDC608DA10A42B147E443345EBB0AA1639077BBDF0AF32D148744FAF",
+    "aMiddle": "77335AE69FB3688ECDCEA5C8C2A853899415CF143D6FFE85E4FFE1DF05608B91",
+    "bReturn": "7626F42ADDC608DA10A42B147E443345EBB0AA1639077BBDF0AF32D148744FAF",
+    "bitexact": true,
+    "fullPipelineReset": true
+  },
+  "modelACompatibility": "310.8.0.0 package; 310.9.16.0 A prepared and verified by installer",
+  "testScope": "Source-built D3D12/DX11 integration hosts, not a game run. 4K admission uses functional checks; smaller frames compare against an independent codec path.",
+  "testArtifactVersion": "r3-0.8.91_fix-1_model-b-test-1"
+}

@@ -4,7 +4,6 @@
 #include <wrl/client.h>
 #include <algorithm>
 #include <array>
-#include <bitset>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -47,21 +46,20 @@ public:
             Check(result.before->allocator->Reset());Check(result.after->allocator->Reset());
             Check(result.before->list->Reset(result.before->allocator.Get(),nullptr));
             Check(result.after->list->Reset(result.after->allocator.Get(),nullptr));
-            ++reused;
-        }else{result.before=std::make_unique<Commands>(device);result.after=std::make_unique<Commands>(device);++created;}
+        }else{result.before=std::make_unique<Commands>(device);result.after=std::make_unique<Commands>(device);}
         return result;
     }
     void Return(Pair pair)noexcept{
         std::lock_guard lock(mutex);
         for(auto& slot:idle)if(!slot.before){slot=std::move(pair);return;}
     }
-    std::atomic<std::uint64_t> created{0},reused{0};
 private:
     std::mutex mutex;
     std::array<Pair,8> idle;
 };
 // Bounded speculative command capture; native GPU lists are allocated only at
-// a qualified marker. State restoration is canonical, never a setter journal.
+// a qualified marker. Most state is restored canonically; raster overrides
+// retain setter order to preserve the driver's effective state.
 class Recording {
 public:
     using Call=std::function<void(ID3D12GraphicsCommandList*)>;
@@ -74,6 +72,11 @@ public:
     std::shared_ptr<ShadowPool> shadowPool;
     std::atomic<bool> gpuRetired{false};
     std::size_t commandCount=0,bytes=0;
+    // Indices retain actual PSO/raster setter order without duplicating calls.
+    // Some drivers coalesce repeated PSO binds, so a synthetic last-value
+    // snapshot can differ from the original stream's effective raster state.
+    std::vector<unsigned> rasterCommands;
+    bool dynamicRasterHistory=false;
     explicit Recording(ID3D12Device* d,std::uint64_t value,ID3D12PipelineState* initial=nullptr)
         :device(d),generation(value),shadowPool(ShadowPool::ForDevice(d)){
         if(live.fetch_add(1)>=64){--live;throw std::runtime_error("live recording budget");}
@@ -99,11 +102,17 @@ public:
     }
     void Command(Call call) {
         Reserve();
-        if(suffix){NativeHooks::OriginScope scope(NativeHooks::Origin::Private);call(suffix->list.Get());}
+        if(suffix){NativeHooks::OriginScope scope(NativeHooks::Origin::Private);
+            call(suffix->list.Get());}
         else journal.push_back(std::move(call));
     }
     void State(unsigned slot,unsigned index,Call call) {
         states[slot*4096+index]=call;Command(std::move(call));
+    }
+    void RasterCommand(Call call,bool overrideState=false){
+        if(!suffix){rasterCommands.push_back(static_cast<unsigned>(journal.size()));
+            dynamicRasterHistory=dynamicRasterHistory||overrideState;}
+        Command(std::move(call));
     }
     void Root(bool graphics,unsigned index,unsigned kind,Call call,unsigned offset=0) {
         if(index>=64||offset>=64)throw std::runtime_error("root parameter budget");
@@ -145,26 +154,52 @@ public:
         auto before=std::move(pair.before),after=std::move(pair.after);
         for(const auto& call:journal)call(before->list.Get());
         Check(before->list->Close());
-        if(restoreState)for(const auto& state:states)state.second(after->list.Get());
-        journal.clear();prefix=std::move(before);suffix=std::move(after);marked=true;reason="marked";
+        if(restoreState){
+            if(dynamicRasterHistory)for(const auto index:rasterCommands)journal.at(index)(after->list.Get());
+            for(const auto& state:states)
+                if(!dynamicRasterHistory||state.first!=25*4096)state.second(after->list.Get());
+        }
+        journal.clear();rasterCommands.clear();dynamicRasterHistory=false;
+        prefix=std::move(before);suffix=std::move(after);marked=true;reason="marked";
         return true;
     }
     void Close(bool success) {
         closed=success;
         if(!success){Reject("original Close failed");return;}
         if(valid&&suffix){NativeHooks::OriginScope scope(NativeHooks::Origin::Private);Check(suffix->list->Close());}
-        if(!marked){journal.clear();states.clear();kept.clear();}
+        if(!marked){journal.clear();rasterCommands.clear();states.clear();kept.clear();}
     }
     bool Ready()const noexcept{return valid&&closed&&marked&&!submitted&&prefix&&suffix;}
     void ClearState(ID3D12PipelineState* pso) {
         states.clear();signatures.fill(nullptr);for(auto& k:rootKinds)k.fill(0);
         boundHeaps.fill(nullptr);predicated=false;Keep(pso);
-        Command([=](auto* p){p->ClearState(pso);});
+        RasterCommand([=](auto* p){p->ClearState(pso);});
         // A new private list starts with defaults; only non-default PSO needs replay.
         if(pso)states[25*4096]=[=](auto* p){p->SetPipelineState(pso);};
     }
     void SetComputeRootSignature(ID3D12RootSignature* signature){Signature(false,signature);}
     void SetGraphicsRootSignature(ID3D12RootSignature* signature){Signature(true,signature);}
+    void SetPipelineState(ID3D12PipelineState* pso){
+        Keep(pso);Call call=[=](auto* list){list->SetPipelineState(pso);};
+        states[25*4096]=call;RasterCommand(std::move(call));
+    }
+    void RSSetDepthBias(FLOAT bias,FLOAT clamp,FLOAT slope){
+        RasterCommand([=](auto* list){Extended<ID3D12GraphicsCommandList9>(list,
+            [&](auto* extended){extended->RSSetDepthBias(bias,clamp,slope);});},true);
+    }
+    void IASetIndexBufferStripCutValue(D3D12_INDEX_BUFFER_STRIP_CUT_VALUE value){
+        RasterCommand([=](auto* list){Extended<ID3D12GraphicsCommandList9>(list,
+            [&](auto* extended){extended->IASetIndexBufferStripCutValue(value);});},true);
+    }
+    void WriteBufferImmediate(UINT count,const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER* data,
+                              const D3D12_WRITEBUFFERIMMEDIATE_MODE* modes){
+        // Ordered writes retain both arrays. Null modes means DEFAULT.
+        const auto copied=Copy(data,count);const bool hasModes=modes!=nullptr;
+        const auto copiedModes=Copy(modes,hasModes?count:0);
+        Command([=](auto* list){Extended<ID3D12GraphicsCommandList2>(list,[&](auto* extended){
+            extended->WriteBufferImmediate(count,copied.empty()?nullptr:copied.data(),hasModes?copiedModes.data():nullptr);
+        });});
+    }
     void SetDescriptorHeaps(UINT n,ID3D12DescriptorHeap* const* pointers) {
         if(n>2||(!pointers&&n))throw std::runtime_error("descriptor heap count");
         std::array<ID3D12DescriptorHeap*,2> copy{};

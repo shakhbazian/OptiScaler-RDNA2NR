@@ -2,6 +2,7 @@
 
 #include "../include/attention_probe_support.h"
 #include "../include/ffn_candidate.h"
+#include "nr_model_b_quantization.h"
 #include <algorithm>
 #include <cstdio>
 #include <memory>
@@ -391,7 +392,7 @@ __device__ __constant__ float research_inverse_scales[10][160]={
 {0.0625f,0.0625f,0.125f,0.03125f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.125f,0.0625f,0.03125f,0.0625f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.0625f,0.0625f,0.0625f,0.125f,0.0625f,0.0625f,0.125f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f,1.0f},
 {0.125f,0.0625f,0.125f,1.0f,0.125f,0.0625f,0.125f,0.25f,0.0625f,0.125f,0.0625f,0.25f,0.0625f,0.125f,0.5f,0.125f,0.0625f,0.25f,0.125f,0.0625f,0.125f,0.25f,1.0f,0.125f,0.25f,0.5f,0.0625f,0.0625f,0.5f,0.0625f,0.5f,0.125f,0.25f,0.125f,0.25f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.25f,0.125f,0.25f,0.25f,0.125f,0.125f,0.125f,0.125f,0.25f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.25f,0.125f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.125f,0.125f,0.0625f,0.25f,0.125f,0.25f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.125f,0.125f,0.25f,0.25f,0.25f,0.125f,0.125f,0.0625f,0.25f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.25f,0.0625f,0.125f,0.0625f,0.25f,0.125f,0.125f,0.125f,0.25f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.125f,0.25f,0.125f,0.125f,0.25f,0.125f,0.125f,0.25f,0.125f,0.0625f,0.125f,0.125f,0.125f,0.0625f,0.125f,0.0625f,0.25f,0.125f,0.25f,0.125f,0.125f}
 };
-__device__ float research_inverse(unsigned block,unsigned channel){return research_inverse_scales[block<5?block:block-61][channel];}
+__device__ float research_inverse(unsigned block,unsigned channel){return block>=100?nr_b_inverse[block-100][channel]:research_inverse_scales[block<5?block:block-61][channel];}
 
 template<unsigned GroupSize>
 __global__ void fused_c32_ffn_w8a8(const __half* input,
@@ -642,7 +643,9 @@ __global__ void research_c32_fixed_full(const __half* input,
     constexpr int Rows=16,RowThreads=NR_FIXED_ROW_THREADS,RowsPerThread=Rows/RowThreads;
     __shared__ std::int8_t x[Rows][32],hidden[Rows][128];
     __shared__ std::int32_t weights[32*33];
-    const unsigned index=block<5?block:block-61;
+    const unsigned index=block>=100?block-100:(block<5?block:block-61);
+    const float* fixedScale=block>=100?nr_b_c32_scale[index]:research_fixed_scale[index];
+    const float* fixedInverse=block>=100?nr_b_c32_inverse[index]:research_fixed_inverse[index];
     const int lane=threadIdx.x,tid=threadIdx.y*32+lane;
     const int first=blockIdx.x*Rows+threadIdx.y;
     #pragma unroll
@@ -650,7 +653,7 @@ __global__ void research_c32_fixed_full(const __half* input,
         const int tr=threadIdx.y+r*RowThreads,row=first+r*RowThreads;
         const float value=row<rows?__half2float(__float2half(__half2float(input[size_t(row)*32+lane])*research_inverse(block,lane))):0.f;
         if(!isfinite(value))atomicOr(status,1u);
-        x[tr][lane]=std::int8_t(max(-127,min(127,__float2int_rn(value*research_fixed_inverse[index][0]))));
+        x[tr][lane]=std::int8_t(max(-127,min(127,__float2int_rn(value*fixedInverse[0]))));
     }
     for(int i=tid;i<1024;i+=32*RowThreads){
         const int col=i/8,q=i%8;weights[q*129+col]=reinterpret_cast<const std::int32_t*>(expandWeight)[i];
@@ -663,12 +666,12 @@ __global__ void research_c32_fixed_full(const __half* input,
             #pragma unroll
             for(int q=0;q<8;++q)partial=amd_mixed_dot(*reinterpret_cast<const char4*>(x[tr]+q*4),
                 *reinterpret_cast<const char4*>(weights+q*129+chunk*32+lane),partial,false);
-            const float combined=research_fixed_scale[index][0]*expandScale[chunk*32+lane];
+            const float combined=fixedScale[0]*expandScale[chunk*32+lane];
             float sum=0;sum+=float(partial)*combined;
             const __half gated=pubh(rdna2_nr::ffn_gate(__float2half(sum)));
             const float value=__half2float(__float2half(__half2float(gated)*research_inverse(block,32+chunk*32+lane)));
             if(!isfinite(value))atomicOr(status,1u);
-            hidden[tr][chunk*32+lane]=std::int8_t(max(-127,min(127,__float2int_rn(value*research_fixed_inverse[index][1+chunk]))));
+            hidden[tr][chunk*32+lane]=std::int8_t(max(-127,min(127,__float2int_rn(value*fixedInverse[1+chunk]))));
         }
     }
     __syncthreads();
@@ -685,7 +688,7 @@ __global__ void research_c32_fixed_full(const __half* input,
             #pragma unroll
             for(int q=0;q<8;++q)partial=amd_mixed_dot(*reinterpret_cast<const char4*>(hidden[tr]+chunk*32+q*4),
                 *reinterpret_cast<const char4*>(weights+(chunk*8+q)*33+lane),partial,false);
-            const float combined=research_fixed_scale[index][1+chunk]*contractScale[chunk*32+lane];
+            const float combined=fixedScale[1+chunk]*contractScale[chunk*32+lane];
             sum+=float(partial)*combined;
         }
         if(row<rows)output[size_t(row)*32+lane]=__hadd(__float2half(sum),__hmul(input[size_t(row)*32+lane],cosine[lane]));

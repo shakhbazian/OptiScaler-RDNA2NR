@@ -1914,13 +1914,14 @@ void StreamlineHooks::hookInterposer(HMODULE slInterposer)
         unhookInterposer();
 
     {
-        char dllPath[MAX_PATH];
-        GetModuleFileNameA(slInterposer, dllPath, MAX_PATH);
-
-        LOG_TRACE("slInterposer path: {}", dllPath);
-
-        version_t sl_version;
-        Util::GetFileVersion(string_to_wstring(dllPath), &sl_version);
+        // Keep the Windows path in UTF-16, including non-ASCII and long game paths.
+        wchar_t dllPath[32768] {};
+        const DWORD pathLength = GetModuleFileNameW(slInterposer, dllPath, ARRAYSIZE(dllPath));
+        version_t sl_version {};
+        if (pathLength == 0 || pathLength >= ARRAYSIZE(dllPath) || !Util::GetFileVersion(dllPath, &sl_version))
+            LOG_WARN("Could not read sl.interposer.dll's version");
+        else
+            LOG_TRACE("slInterposer path: {}", wstring_to_string(dllPath));
 
         State::Instance().streamlineVersion.major = sl_version.major;
         State::Instance().streamlineVersion.minor = sl_version.minor;

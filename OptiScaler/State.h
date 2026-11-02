@@ -193,7 +193,7 @@ class State
     bool fgHudlessCompare = false;
     bool fgChanged = false;
     bool scChanged = false;
-    bool skipHeapCapture = false;
+    inline static thread_local bool skipHeapCapture = false;
 
     bool fgCaptureResources = false;
     size_t fgCapturedResourceCount = 0;
@@ -297,8 +297,22 @@ class State
     std::vector<std::string> detectedQuirks {};
 
     // FFX
-    std::vector<const char*> ffxUpscalerVersionNames {};
-    std::vector<uint64_t> ffxUpscalerVersionIds {};
+    // Separate lists as DX12 (incl. w/Dx12) and Vulkan FFX can report different upscalers
+    struct FfxVersionList
+    {
+        std::vector<std::string> ownedNames {};
+        std::vector<const char*> names {};
+        void OwnNames()
+        {
+            std::vector<std::string> copy;
+            for (auto name : names) copy.emplace_back(name ? name : "Unknown");
+            ownedNames = std::move(copy);
+            for (size_t i = 0; i < names.size(); ++i) names[i] = ownedNames[i].c_str();
+        }
+        std::vector<uint64_t> ids {};
+    };
+    FfxVersionList ffxUpscalerVersionsDx12 {};
+    FfxVersionList ffxUpscalerVersionsVk {};
     std::vector<const char*> ffxFGVersionNames {};
     std::vector<uint64_t> ffxFGVersionIds {};
     std::optional<uint32_t> currentFsr4Preset {};
@@ -311,7 +325,9 @@ class State
 
     // Vulkan stuff
     bool vulkanCreatingSC = false;
-    bool creatingD3DDevice = false;
+    // Per thread, it's only meant for the call chain of the thread creating the device
+    // and overlapping ScopedCreatingD3DDevice from different threads could leave it stuck
+    inline static thread_local bool creatingD3DDevice = false;
     bool vulkanSkipHooks = false;
     VkInstance VulkanInstance = nullptr;
 
@@ -356,6 +372,7 @@ class State
 
     std::atomic_bool isShuttingDown { false };
     std::set<PVOID> modulesToFree;
+    std::mutex modulesToFreeMutex;
 
     // menu warnings
     bool fgSettingsChanged = false;

@@ -48,6 +48,7 @@ $files=[ordered]@{
     'docs/release-notes/r2-0.8.91.md'='docs/release-notes/r2-0.8.91.md'
     'docs/release-notes/r3-0.8.91.md'='docs/release-notes/r3-0.8.91.md'
     'docs/release-notes/r3-0.8.91_fix-1.md'='docs/release-notes/r3-0.8.91_fix-1.md'
+    'docs/release-notes/r4-0.8.10.md'='docs/release-notes/r4-0.8.10.md'
     'Install-RDNA2NR.ps1'='Install-RDNA2NR.ps1'
     'Install-RDNA2NR.cmd'='Install-RDNA2NR.cmd'
     'OptiScaler/libxess.dll'='external/xess/bin/libxess.dll'
@@ -64,6 +65,7 @@ $files=[ordered]@{
     'Licenses/FidelityFX_v2_LICENSE.md'='external/FidelityFX-SDK-v2/docs/license.md'
     'Licenses/DirectX_LICENSE.txt'='external/directx_agility_sdk/LICENSE.txt'
     'Licenses/FreeType_FTL.txt'='Licenses/FreeType_FTL.txt'
+    'Licenses/DLSSNR-AMD_LICENSE.txt'='Licenses/DLSSNR-AMD_LICENSE.txt'
     'Licenses/RenoDX_ATTRIBUTION.txt'='Licenses/RenoDX_ATTRIBUTION.txt'
     'Licenses/MFGUnlock_LICENSE.txt'='Licenses/MFGUnlock_LICENSE.txt'
     'Licenses/PeripheralWarp_LICENSE.txt'='external/peripheral_warp/LICENSE'
@@ -73,7 +75,7 @@ foreach($entry in $files.GetEnumerator()){
     if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw "Missing release input: $source"}
 }
 $converterFiles=@('write_runtime_package.py','model_weight_provider.py','weights_ht.py',
-    'model_schemas.py','qmma_layout.py','research_layouts.py')
+    'model_schemas.py','qmma_layout.py','research_layouts.py','model_profiles.py','model_catalog.json')
 foreach($name in $converterFiles){
     $source=Join-Path $root "tools/model_converter/$name"
     if(-not(Test-Path -LiteralPath $source -PathType Leaf)){throw "Missing converter source: $source"}
@@ -104,7 +106,7 @@ $otherDefaults=[regex]::Replace([regex]::Replace($ini,$nrSection,''),$fgSection,
 if($ini -notmatch '(?mi)^TargetProcessName=auto\s*$' -or
    $nrDefaults -notmatch '(?mi)^Enabled=true\s*$' -or
    $fgDefaults -notmatch '(?mi)^Enabled=true\s*$' -or
-   $otherDefaults -match '(?mi)^Enabled=true\s*$' -or $ini -match '(?mi)^ModelPath=\S+' -or
+   $otherDefaults -match '(?mi)^Enabled=true\s*$' -or $ini -match '(?mi)^Model(?:B)?Path=\S+' -or
    $fgDefaults -notmatch '(?mi)^FGInput=FSRFG30\s*$' -or $fgDefaults -notmatch '(?mi)^FGOutput=XeFG\s*$' -or
    $ini -match '(?mi)^(FinishedPicture|DeferredDLSS|AdaMfgUnlock|Fsr4EnableWatermark|EnableWatermark)=true\s*$' -or
    $ini -match '(?mi)^DebugView=(true|[1-9][0-9]*)\s*$' -or

@@ -31,7 +31,11 @@ constexpr const char* AcceptedMixedName = "mixed-v5-group64-c32-fp16-split4-2026
 // The execution profile can change without changing the model-package format.
 constexpr std::uint32_t OptimizedCheckpointId = 0x20261002u;
 constexpr const char* OptimizedCheckpointName = "static-c32-long-int32-wave-qkv64-20261002";
-#ifdef NR_OPTIMIZED_CHECKPOINT
+constexpr std::uint32_t ModelABProfileId = 0x20261017u;
+constexpr const char* ModelABProfileName = "model-a-release-b-balanced-20261017";
+#if defined(NR_MODEL_B_MIXED)
+constexpr auto CompiledProfileId = ModelABProfileId;
+#elif defined(NR_OPTIMIZED_CHECKPOINT)
 constexpr auto CompiledProfileId = OptimizedCheckpointId;
 #else
 constexpr auto CompiledProfileId = AcceptedMixedId;

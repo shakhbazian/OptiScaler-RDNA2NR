@@ -10,7 +10,9 @@
 #include "../include/nr_runtime_v3_session.h"
 #include "../include/nr_weight_package.h"
 #include "../include/nr_gpu_model.h"
+#include "../include/nr_model_spec.h"
 #include "../include/nr_spatial_graph.h"
+#include "../include/nr_runtime_log.h"
 #ifdef NR_SCHEDULED_MIXED
 #include "../include/nr_gpu_scheduled_state.h"
 #endif
@@ -166,12 +168,16 @@ struct RuntimeDx12::Impl {
         Require(d&&q,"device and queue required");ComPtr<ID3D12Device> owner;
         Hr(q->GetDevice(IID_PPV_ARGS(&owner)),"queue GetDevice");
         Require(owner.Get()==d&&q->GetDesc().Type==D3D12_COMMAND_LIST_TYPE_DIRECT,"direct bound queue required");
+        NrRuntimeLog::Write("create: enumerate HIP devices");
         const LUID luid=d->GetAdapterLuid();int count=0,selected=-1;Hip(hipGetDeviceCount(&count),"hipGetDeviceCount");
+        NrRuntimeLog::Write("create: match HIP adapter to D3D12 LUID");
         for(int i=0;i<count;++i){hipDeviceProp_t p{};Hip(hipGetDeviceProperties(&p,i),"hipGetDeviceProperties");if(!std::memcmp(&luid,p.luid,sizeof(luid))&&!std::strncmp(p.gcnArchName,"gfx1030",7)){selected=i;break;}}
         Require(selected>=0,"matching gfx1030 HIP device required");
         hipDevice=selected;
+        NrRuntimeLog::Write("create: bind HIP device");
         ScopedHipDevice boundDevice(hipDevice);
         try{
+            NrRuntimeLog::Write("create: stream priority and allocation");
             char priorityFlag[16]{};
             const bool tryHigh=scheduled&&GetEnvironmentVariableA("DLSSNR_HIP_PRIORITY",priorityFlag,sizeof(priorityFlag))>0&&
                 std::strcmp(priorityFlag,"high")==0;
@@ -217,10 +223,15 @@ struct RuntimeDx12::Impl {
                 Require(transferFrequency>0,"zero transfer timestamp frequency");
             }
 #endif
+            NrRuntimeLog::Write("create: completion event");
             Hip(hipEventCreateWithFlags(&completion,hipEventDisableTiming),"hipEventCreate");
+            NrRuntimeLog::Write("create: device validation buffer");
             Hip(hipMalloc(&finiteDevice,sizeof(*finiteDevice)),"hipMalloc finite");
+            NrRuntimeLog::Write("create: host validation buffer");
             Hip(hipHostMalloc(&finiteHost,sizeof(*finiteHost),hipHostMallocDefault),"hipHostMalloc finite");*finiteHost=0;
-            CreateTimeline(d3d);CreateTimeline(hip);
+            NrRuntimeLog::Write("create: D3D12 shared timeline");CreateTimeline(d3d);
+            NrRuntimeLog::Write("create: HIP shared timeline");CreateTimeline(hip);
+            NrRuntimeLog::Write("create: ready");
         }catch(...){CleanupPartial();throw;}
     }
     void CleanupPartial()noexcept{
@@ -405,6 +416,7 @@ struct RuntimeDx12::Impl {
             else{
                 std::vector<std::uint8_t> owned(static_cast<std::size_t>(count));std::memcpy(owned.data(),bytes,owned.size());
                 replacement=std::make_unique<NrV2::WeightPackage>(NrV2::WeightPackage::LoadMemory(std::move(owned),Digest(next.packageHash),Digest(next.sourceHash)));
+                if(replacement->GraphVersion()!=next.graphVersion)return Status::InvalidArgument;
             }
             if(prepared||head||committed||candidate){if(hipStreamSynchronize(stream)!=hipSuccess)throw CleanupError("reconfigure idle");FreeNeuralBuffersChecked();}
             if(!sameModel){
@@ -424,7 +436,7 @@ struct RuntimeDx12::Impl {
                 Hip(hipMemsetAsync(gpuDecisions,0,Capacity*sizeof(*gpuDecisions),stream),"clear decisions");}
 #endif
             Hip(hipMemsetAsync(prepared,0,featureBytes,stream),"memset prepared");Hip(hipMemsetAsync(committed,0,historyBytes,stream),"memset committed");Hip(hipMemsetAsync(candidate,0,historyBytes,stream),"memset candidate");
-            graph->Prepare(prepared,next.networkHeight,next.networkWidth,head);blendScale=model->TensorData(70,"temporal_blend_scale",1);
+            graph->Prepare(prepared,next.networkHeight,next.networkWidth,head);blendScale=model->TensorData(NrModel::Get(next.graphVersion).post,"temporal_blend_scale",1);
 #ifdef NR_SCHEDULED_MIXED
             CaptureNetwork(next);
             if(scheduled){if(configured){if(scheduledGeneration==ReservedSerial-1)throw std::runtime_error("scheduled generation overflow");++scheduledGeneration;}
@@ -449,8 +461,8 @@ struct RuntimeDx12::Impl {
                         freeBefore>=freeAfter?freeBefore-freeAfter:0,totalAfter);}
 #endif
             return Status::Ok;
-        }catch(const CleanupError& e){std::fprintf(stderr,"v3 configure cleanup: %s\n",e.what());Quarantine();return Status::Quarantined;
-        }catch(const std::exception& e){std::fprintf(stderr,"v3 configure: %s\n",e.what());
+        }catch(const CleanupError& e){NrRuntimeLog::Write(e.what());Quarantine();return Status::Quarantined;
+        }catch(const std::exception& e){NrRuntimeLog::Write(e.what());
 #ifdef NR_SCHEDULED_MIXED
             if(scheduled){scheduledFaulted=true;return Status::Failed;}
 #endif

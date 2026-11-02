@@ -1,17 +1,27 @@
 // Source-built native D3D12 NGX host. It exercises the actual OptiScaler DLL,
 // not the standalone FSR2 fixture or the DX11-on-12 bridge.
 #define NR_RUNTIME_DLL_PROBE_HELPERS_ONLY
+#include "../include/nr_model_catalog.h"
+#include "../include/nr_model_spec.h"
 #include "runtime_v2_dll_probe.cpp"
 #include <nvsdk_ngx_params.h>
 #include <dbghelp.h>
 #include <chrono>
 #include <filesystem>
 #include <cmath>
+#include <sstream>
 #include "../include/nr_submission_runtime_contract.h"
 #include "../include/nr_execution_profile.h"
 #include "../include/nr_extent.h"
 #include "../tests/submission/forwarding_list.h"
 #include "../tests/common_color_reference.h"
+#include "../tests/graphics_producer.h"
+#ifdef NR_HOST_AGILITY_SDK_VERSION
+extern "C" {
+__declspec(dllexport) extern const UINT D3D12SDKVersion=NR_HOST_AGILITY_SDK_VERSION;
+__declspec(dllexport) extern const char* D3D12SDKPath=".\\AgilitySDK\\";
+}
+#endif
 
 namespace {
 ID3D12Device* firstDeviceIdentity=nullptr;
@@ -43,6 +53,13 @@ void UploadColor(ID3D12Device* device,ID3D12CommandQueue* queue,ID3D12Resource* 
     }else UploadTexture(device,queue,target,input);
 }
 NrV2::Controls FrameControls(unsigned frame){
+    char field[16]{};
+    if(GetEnvironmentVariableA("NR_HOST_CONTROL_FIELD",field,sizeof(field))){
+        const unsigned index=std::stoul(field);Require(index<6,"control field");
+        float v[6]={0,1,1,-1,1,1};
+        if(frame%3==1)v[index]=index==0?2.f:0.f;
+        return {v[0],v[1],v[2],v[3],v[4],v[5]};
+    }
     const NrV2::Controls presets[]={{2,1,1,-1,0,1},{0,.25f,.5f,0,1,.75f},{1,1.5f,1.5f,.5f,0,.5f}};
     return presets[frame%3];
 }
@@ -98,17 +115,18 @@ struct Reference {
         w=width;h=height;
         module=LoadLibraryExW((directory/L"dlssnr_hip_scheduled_bridge.dll").c_str(),nullptr,LOAD_WITH_ALTERED_SEARCH_PATH);
         Require(module,"reference DLL");auto get=Entry<NrSubmissionApi::GetApi>(module,"DlssNrHipBackendGetScheduledApiV2");
-        auto status=get(NrExecution::OptimizedCheckpointId,2,&api,sizeof(api));
+        auto status=get(NrExecution::ModelABProfileId,2,&api,sizeof(api));
+        if(status==NrV3::Status::Unsupported)status=get(NrExecution::OptimizedCheckpointId,2,&api,sizeof(api));
         if(status==NrV3::Status::Unsupported)status=get(NrExecution::AcceptedMixedId,2,&api,sizeof(api));
         Require(status==NrV3::Status::Ok,"reference API");
         Require(api.create(d,q,&runtime)==NrV3::Status::Ok,"reference create");
         std::ifstream in(directory/L"dlssnr_gfx1030_v1.nrwgt",std::ios::binary|std::ios::ate);Require(bool(in),"reference weights");
         std::vector<unsigned char> bytes(static_cast<size_t>(in.tellg()));in.seekg(0);in.read(reinterpret_cast<char*>(bytes.data()),bytes.size());Require(bool(in),"reference weight read");
         NrV3::Config config{};config.prefix={sizeof(config),NrV3::Version};
-        config.sourceHash=ParseHash("E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E");
-        config.packageHash=ParseHash("A7E6EE38172A81E12D613FA9A2F57E32AA1944908E56CD2A33E1F6C94369E3CB");
-        config.graphVersion=1;config.mathContract=NrV2::MathContract;config.logicalWidth=w;config.logicalHeight=h;
-        config.networkWidth=NrV2::AlignNetworkExtent(w);config.networkHeight=NrV2::AlignNetworkExtent(h);
+        const auto* identity=NrModel::Identify(bytes.data(),bytes.size());Require(identity,"reference package identity");
+        config.sourceHash=ParseHash(identity->sourceHash);config.packageHash=ParseHash(identity->packageHash);
+        config.graphVersion=identity->graph;config.mathContract=NrV2::MathContract;config.logicalWidth=w;config.logicalHeight=h;
+        const auto extent=NrModel::WorkingExtent(identity->graph,w,h);config.networkWidth=extent.width;config.networkHeight=extent.height;
         Require(api.configure(runtime,&config,sizeof(config),bytes.data(),bytes.size())==NrV3::Status::Ok,"reference configure");
     }
     NrV3::Snapshot Poll(){
@@ -197,7 +215,7 @@ int wmain(int argc,wchar_t** argv) try {
     const unsigned outputScale=GetEnvironmentVariableW(L"NR_HOST_NATIVE_OUTPUT",nativeOutput,4)==1&&
                                nativeOutput[0]==L'1'?1u:2u;
     Require(frames>=3&&frames<=64,"bounded diagnostic frame count");
-    Require(scenario==L"pan_jitter"||scenario==L"scale_cycle"||scenario==L"scale_stream"||scenario==L"present_queue"||scenario==L"rgba8"||scenario==L"rgba32"||scenario==L"r11"||scenario==L"standard"||scenario==L"notifier"||scenario==L"write_immediate"||scenario==L"exposure"||scenario==L"apply_off"||scenario==L"transfer_zero"||scenario==L"batch"||scenario==L"reuse"||scenario==L"early_reset"||scenario==L"scope"||scenario==L"stream"||scenario==L"paced_stream"||scenario==L"recreate"||scenario==L"queue_switch"||scenario==L"resize"||scenario==L"drs"||scenario==L"create1_alias"||scenario==L"hdr"||scenario==L"subrect_bypass"||scenario==L"bundle_bypass"||scenario==L"unknown_motion_state"||scenario==L"device_reinit"||scenario==L"controls"||scenario==L"toggle"||scenario==L"temporal_toggle"||scenario==L"wrapper"||scenario==L"wrapper_bypass"||scenario==L"motion32_bypass","host scenario");
+    Require(scenario==L"draw_reuse_postcopy"||scenario==L"draw_reuse_restore"||scenario==L"draw_reuse"||scenario==L"draw_postcopy"||scenario==L"draw_restore"||scenario==L"draw"||scenario==L"model_cycle"||scenario==L"pan_jitter"||scenario==L"scale_cycle"||scenario==L"scale_stream"||scenario==L"present_queue"||scenario==L"rgba8"||scenario==L"rgba32"||scenario==L"r11"||scenario==L"standard"||scenario==L"notifier"||scenario==L"write_immediate"||scenario==L"exposure"||scenario==L"apply_off"||scenario==L"transfer_zero"||scenario==L"batch"||scenario==L"reuse"||scenario==L"early_reset"||scenario==L"scope"||scenario==L"stream"||scenario==L"paced_stream"||scenario==L"recreate"||scenario==L"queue_switch"||scenario==L"resize"||scenario==L"drs"||scenario==L"create1_alias"||scenario==L"hdr"||scenario==L"subrect_bypass"||scenario==L"bundle_bypass"||scenario==L"unknown_motion_state"||scenario==L"device_reinit"||scenario==L"controls"||scenario==L"toggle"||scenario==L"temporal_toggle"||scenario==L"wrapper"||scenario==L"wrapper_bypass"||scenario==L"motion32_bypass","host scenario");
     Require(mode<=4,"host mode");
     Require(!(scenario==L"stream"&&frames>3&&mode>=3),"reference has three in-flight slots");
     Require(scenario!=L"recreate"||frames>=4,"recreate requires four frames");
@@ -231,10 +249,26 @@ int wmain(int argc,wchar_t** argv) try {
         device=candidate;queue=q;break;
     }
     Require(device&&queue,"AMD native D3D12 device and queue");
+    if(const auto core=GetModuleHandleW(L"D3D12Core.dll")){
+        wchar_t path[1024]{};GetModuleFileNameW(core,path,1024);
+        char utf8Path[4096]{};WideCharToMultiByte(CP_UTF8,0,path,-1,utf8Path,4096,nullptr,nullptr);
+        const auto* version=reinterpret_cast<const UINT*>(GetProcAddress(core,"D3D12SDKVersion"));
+        std::printf("NativeCore sdk=%u path=%s debug_layer=%u\n",version?*version:0,utf8Path,unsigned(debugEnabled));
+    }
     if(firstDeviceIdentity)std::printf("NativeDeviceReinit same_identity=%u\n",device.Get()==firstDeviceIdentity?1u:0u);
     const auto sourceFormat=scenario==L"rgba8"?DXGI_FORMAT_R8G8B8A8_UNORM:scenario==L"rgba32"?
         DXGI_FORMAT_R32G32B32A32_FLOAT:scenario==L"r11"?DXGI_FORMAT_R11G11B10_FLOAT:DXGI_FORMAT_R16G16B16A16_FLOAT;
-    const auto color=CreateTexture(device.Get(),TextureDesc(width,height,sourceFormat),
+    const bool rasterSource=scenario==L"draw"||scenario==L"draw_reuse_postcopy"||scenario==L"draw_reuse_restore"||scenario==L"draw_reuse"||scenario==L"draw_postcopy"||scenario==L"draw_restore";
+    const bool postCopyScenario=scenario==L"draw_postcopy"||scenario==L"draw_reuse_postcopy";
+    const bool restoreScenario=scenario==L"draw_restore"||scenario==L"draw_reuse_restore";
+    // The NR-off oracle uses fresh lists for legacy-listener fixtures. Runtime
+    // Bypass also bypasses those old listeners when NR is off; this fix leaves
+    // that mode untouched. All NR-enabled A-E controls still exercise Reset.
+    const bool reuseCommands=(scenario==L"reuse"||scenario.rfind(L"draw_reuse",0)==0)&&
+        (mode!=0||(!postCopyScenario&&!restoreScenario));
+    std::printf("NativeCommandReuse enabled=%u mode=%u\n",reuseCommands?1u:0u,mode);
+    const auto color=CreateTexture(device.Get(),TextureDesc(width,height,sourceFormat,
+        rasterSource?D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET:D3D12_RESOURCE_FLAG_NONE),
                                    D3D12_RESOURCE_STATE_COPY_DEST);
     const auto motion=CreateTexture(device.Get(),TextureDesc(width,height,scenario==L"motion32_bypass"?DXGI_FORMAT_R32G32_FLOAT:DXGI_FORMAT_R16G16_FLOAT),
                                     D3D12_RESOURCE_STATE_COPY_DEST);
@@ -269,7 +303,20 @@ int wmain(int argc,wchar_t** argv) try {
         Hr(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,
             D3D12_RESOURCE_STATE_COMMON,nullptr,IID_PPV_ARGS(&immediateBuffer)),"immediate buffer");
     }
+    GraphicsProducer graphics;unsigned drawFrame=0;
+    using PostCopyFn=unsigned(*)(ID3D12GraphicsCommandList*,ID3D12Resource*,ID3D12Resource*);
+    PostCopyFn postCopy=nullptr;
+    ComPtr<ID3D12Resource> drawSurface;
+    if(postCopyScenario){
+        drawSurface=CreateTexture(device.Get(),TextureDesc(width,height,sourceFormat,D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+            D3D12_RESOURCE_STATE_COPY_DEST);
+        UploadColor(device.Get(),queue.Get(),drawSurface.Get(),std::vector<Rgba16>(pixels.size()));
+    }
     auto produceTo=[&](ID3D12GraphicsCommandList* list,ID3D12Resource* target){
+        if(rasterSource){
+            if(postCopy)Require(postCopy(list,drawSurface.Get(),target)==1,"post-draw copy listener armed");
+            graphics.Draw(list,drawSurface?drawSurface.Get():target,width,height,drawFrame);return;
+        }
         D3D12_RESOURCE_BARRIER barriers[]={Barrier(scene.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE),
             Barrier(target,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST)};
         list->ResourceBarrier(2,barriers);list->CopyResource(target,scene.Get());
@@ -286,8 +333,21 @@ int wmain(int argc,wchar_t** argv) try {
     const auto evaluate=Entry<EvaluateFn>(module,"NVSDK_NGX_D3D12_EvaluateFeature");
     const auto release=Entry<ReleaseFn>(module,"NVSDK_NGX_D3D12_ReleaseFeature");
     const auto shutdown=Entry<ShutdownFn>(module,"NVSDK_NGX_D3D12_Shutdown");
+    if(postCopyScenario||restoreScenario)
+        Require(Entry<unsigned(*)()>(module,"DlssNrNativeTestPrepareGraphics")()==1,"headless D3D12 proxy initialization");
     Require(init(0x1337,L".",device.Get(),static_cast<NVSDK_NGX_Version>(0x15),nullptr)==
             NVSDK_NGX_Result_Success,"NGX D3D12 init");
+    if(postCopyScenario||restoreScenario){
+        Require(Entry<unsigned(*)()>(module,"DlssNrNativeTestTrackingIsolation")()==1,"per-thread root-state tracking");
+        std::printf("NativeRootTracking isolated_threads=1\n");
+    }
+    char rasterText[8]{};
+    const unsigned dynamicRaster=GetEnvironmentVariableA("NR_HOST_DYNAMIC_RASTER",rasterText,sizeof(rasterText))?unsigned(std::stoul(rasterText)):0;
+    Require(dynamicRaster<=3&&(!dynamicRaster||rasterSource),"dynamic raster fixture options");
+    if(rasterSource)graphics.Open(device.Get(),scene.Get(),dynamicRaster);
+    std::printf("NativeRasterDynamic mask=%u\n",dynamicRaster);
+    if(postCopyScenario)postCopy=Entry<PostCopyFn>(module,"DlssNrNativeTestPostDrawCopy");
+    if(restoreScenario)graphics.restore=Entry<decltype(graphics.restore)>(module,"DlssNrNativeTestRestoreGraphics");
     // The diagnostic DLL exposes the same assignment made by swapchain/FG
     // integration. Keep the host isolated from unrelated injection hooks.
     ComPtr<ID3D12CommandQueue> presentQueue;
@@ -337,12 +397,26 @@ int wmain(int argc,wchar_t** argv) try {
     ToggleFn setEnabled=nullptr;
     ToggleFn setControls=nullptr;
     ToggleFn setTemporal=nullptr;
+    ToggleFn setModel=nullptr;
+    if(scenario==L"model_cycle")setModel=Entry<ToggleFn>(module,"DlssNrNativeTestSetModel");
     using ScaleFn=void (*)(float);
     ScaleFn setScale=nullptr;
+    std::vector<float> testScales={1.f,.5f,.75f,1.25f,2.f,.25f,1.f};
+    char testScaleText[512]{};
+    if(GetEnvironmentVariableA("NR_HOST_TEST_SCALES",testScaleText,sizeof(testScaleText))){
+        testScales.clear();std::stringstream values(testScaleText);std::string value;
+        while(std::getline(values,value,',')){
+            const auto scale=std::stof(value);
+            Require(std::isfinite(scale)&&scale>=.25f&&scale<=2.f,"test scale range");
+            testScales.push_back(scale);
+        }
+        Require(!testScales.empty(),"test scale list");
+    }
     if(scenario==L"scale_cycle"||scenario==L"scale_stream")
         setScale=Entry<ScaleFn>(module,"DlssNrNativeTestSetWorkingScale");
     wchar_t capturePath[32768]{};
     GetEnvironmentVariableW(L"NR_HOST_OUTPUT_DIR",capturePath,32768);
+    const bool dumpSource=GetEnvironmentVariableW(L"NR_HOST_SOURCE_DUMP",nullptr,0)>0;
     if(capturePath[0])std::filesystem::create_directories(capturePath);
     auto saveFrame=[&](unsigned frame,const std::vector<Rgba16>& result){
         if(!capturePath[0])return;
@@ -350,6 +424,16 @@ int wmain(int argc,wchar_t** argv) try {
         file.write(reinterpret_cast<const char*>(result.data()),result.size()*sizeof(Rgba16));
         Require(bool(file),"capture output frame");
     };
+    wchar_t rejectFrameText[16]{};
+    const bool rejectCase=GetEnvironmentVariableW(L"NR_HOST_REJECT_FRAME",rejectFrameText,16)>0;
+    const unsigned rejectFrame=rejectCase?static_cast<unsigned>(std::stoul(rejectFrameText)):0;
+    Require(!rejectCase||rejectFrame<frames,"rejected frame index");
+    wchar_t rejectStageText[16]{};
+    const unsigned rejectStage=GetEnvironmentVariableW(L"NR_HOST_REJECT_STAGE",rejectStageText,16)>0?
+        static_cast<unsigned>(std::stoul(rejectStageText)):1u;
+    Require(!rejectCase||rejectStage==1||rejectStage==3,"rejection stage");
+    ToggleFn rejectSubmission=nullptr;
+    if(rejectCase&&(mode==1||mode==2))rejectSubmission=Entry<ToggleFn>(module,"DlssNrNativeTestFailure");
     if(scenario==L"toggle"&&(mode==1||mode==2))setEnabled=Entry<ToggleFn>(module,"DlssNrNativeTestSetEnabled");
     if(scenario==L"controls"&&(mode==1||mode==2))setControls=Entry<ToggleFn>(module,"DlssNrNativeTestSetControls");
     if(scenario==L"temporal_toggle"&&(mode==1||mode==2))setTemporal=Entry<ToggleFn>(module,"DlssNrNativeTestSetTemporal");
@@ -400,9 +484,20 @@ int wmain(int argc,wchar_t** argv) try {
     unsigned pacingWaits=0;
     const auto loopStart=std::chrono::steady_clock::now();
     for(unsigned frame=0;frame<frames;++frame){
+        if(setModel&&frame%2==0){
+            const unsigned model=(frame/2)%3==0?2:(frame/2)%3==1?1:0;
+            setModel(model);
+            auto warm=OpenCommands(device.Get());produce(warm.list.Get());
+            Require(evaluate(warm.list.Get(),handle,params,nullptr)==NVSDK_NGX_Result_Success,"model switch warmup");
+            ExecuteAndWait(device.Get(),queue.Get(),warm.list.Get());
+            for(unsigned i=0;i<6000&&!ready()&&!faults();++i)Sleep(5);
+            Require(ready()&&!faults(),"model switch ready");
+            params->Set(NVSDK_NGX_Parameter_Reset,1u);
+            std::printf("NativeModelCycle frame=%u selected=%u ready=1\n",frame,model);
+        }
+
         if(setScale&&frame%3==0){
-            constexpr float scales[]={1.f,.5f,.75f,1.25f,2.f,.25f,1.f};
-            const float scale=scales[(frame/3)%7];setScale(scale);
+            const float scale=testScales[(frame/3)%testScales.size()];setScale(scale);
             if(scenario==L"scale_cycle"&&frame){
                 params->Set(NVSDK_NGX_Parameter_Reset,1u);
                 auto warmup=OpenCommands(device.Get());produce(warmup.list.Get());
@@ -444,15 +539,17 @@ int wmain(int argc,wchar_t** argv) try {
         auto* frameOutput=streaming?streamOutputs[frame].Get():output.Get();
         params->Set(NVSDK_NGX_Parameter_Color,frameColor);
         params->Set(NVSDK_NGX_Parameter_Output,frameOutput);
-        const bool resetFrame=frame==0||(scenario==L"scale_cycle"&&frame%3==0)||(scenario==L"toggle"&&frame==3)||
+        // Model comparison resets SR as well as NR; otherwise FSR retains the prior model edit.
+        const bool resetFrame=frame==0||(scenario==L"controls"&&GetEnvironmentVariableW(L"NR_HOST_CONTROL_FIELD",nullptr,0))||(scenario==L"model_cycle"&&frame%2==0)||(scenario==L"scale_cycle"&&frame%3==0)||(scenario==L"toggle"&&frame==3)||
             ((scenario==L"recreate"||scenario==L"queue_switch")&&frame==frames/2);
-        params->Set(NVSDK_NGX_Parameter_Reset,resetFrame?1u:0u);
+        // Isolate the rejected frame from SR history carrying an earlier NR edit.
+        params->Set(NVSDK_NGX_Parameter_Reset,(resetFrame||rejectCase)?1u:0u);
         Commands commands;
         if((scenario==L"paced_stream"||scenario==L"scale_stream")&&pacedCommands[frame%3].list){
             commands=std::move(pacedCommands[frame%3]);
             Hr(commands.allocator->Reset(),"paced allocator");
             Hr(commands.list->Reset(commands.allocator.Get(),nullptr),"paced list");
-        }else if(scenario==L"reuse"&&reused.list){commands=std::move(reused);
+        }else if(reuseCommands&&reused.list){commands=std::move(reused);
             Hr(commands.allocator->Reset(),"reused allocator");Hr(commands.list->Reset(commands.allocator.Get(),nullptr),"reused list");}
         else commands=scenario==L"create1_alias"?OpenCommands1(device.Get()):OpenCommands(device.Get());
         Commands producer,tail;
@@ -464,6 +561,8 @@ int wmain(int argc,wchar_t** argv) try {
         }
         ComPtr<ID3D12CommandAllocator> bundleAllocator;
         ComPtr<ID3D12GraphicsCommandList> bundle;
+        ComPtr<ID3D12CommandSignature> diagnosticSignature;
+        ComPtr<ID3D12Resource> diagnosticArguments;
         if(scenario==L"bundle_bypass"){
             Hr(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_BUNDLE,
                 IID_PPV_ARGS(&bundleAllocator)),"bundle allocator");
@@ -472,6 +571,7 @@ int wmain(int argc,wchar_t** argv) try {
             Hr(bundle->Close(),"close empty bundle");
             commands.list->ExecuteBundle(bundle.Get());
         }
+        drawFrame=frame;
         produceTo(commands.list.Get(),frameColor);
         if(immediateBuffer){
             ComPtr<ID3D12GraphicsCommandList2> list2;
@@ -504,6 +604,8 @@ int wmain(int argc,wchar_t** argv) try {
         const auto evaluateStart=std::chrono::steady_clock::now();
         Require(evaluate(wrapper?wrapper.Get():commands.list.Get(),handle,params,nullptr)==NVSDK_NGX_Result_Success,
                 "NGX D3D12 Evaluate");
+        // Reject after the frontend has redirected SR, before any NR prefix submits.
+        if(rejectSubmission&&frame==rejectFrame)rejectSubmission(rejectStage);
         if(scenario==L"notifier"){
             ComPtr<ID3DDestructionNotifier> notifier;
             Hr(commands.list.As(&notifier),"destruction notifier after NR marker");
@@ -568,6 +670,13 @@ int wmain(int argc,wchar_t** argv) try {
         std::printf("NativeFrame frame=%u sha256=%s\n",frame,
             Sha256(result.data(),result.size()*sizeof(Rgba16)).c_str());
         saveFrame(frame,result);
+        if(dumpSource&&capturePath[0]){
+            const auto sourcePixels=ReadTexture<Rgba16>(device.Get(),queue.Get(),frameColor,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            std::ofstream file(std::filesystem::path(capturePath)/(L"source-"+std::to_wstring(frame)+L".rgba.f16"),std::ios::binary);
+            file.write(reinterpret_cast<const char*>(sourcePixels.data()),sourcePixels.size()*sizeof(Rgba16));
+            Require(bool(file),"independent GPU source capture");
+        }
         all.insert(all.end(),result.begin(),result.end());
         DebugClean(device.Get());
         if(scenario==L"recreate"&&frame+1==frames/2){
@@ -610,7 +719,7 @@ int wmain(int argc,wchar_t** argv) try {
             }
             std::printf("NativeQueueSwitch ready=%u after_frame=%u\n",ready(),frame);
         }
-        if(scenario==L"reuse")reused=std::move(commands);
+        if(reuseCommands)reused=std::move(commands);
     }
     if(streaming){
         ComPtr<ID3D12Fence> fence;
@@ -620,6 +729,18 @@ int wmain(int argc,wchar_t** argv) try {
         const auto loopUs=std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now()-loopStart).count();
         for(unsigned frame=0;frame<frames;++frame){
+        if(setModel&&frame%2==0){
+            const unsigned model=(frame/2)%3==0?2:(frame/2)%3==1?1:0;
+            setModel(model);
+            auto warm=OpenCommands(device.Get());produce(warm.list.Get());
+            Require(evaluate(warm.list.Get(),handle,params,nullptr)==NVSDK_NGX_Result_Success,"model switch warmup");
+            ExecuteAndWait(device.Get(),queue.Get(),warm.list.Get());
+            for(unsigned i=0;i<6000&&!ready()&&!faults();++i)Sleep(5);
+            Require(ready()&&!faults(),"model switch ready");
+            params->Set(NVSDK_NGX_Parameter_Reset,1u);
+            std::printf("NativeModelCycle frame=%u selected=%u ready=1\n",frame,model);
+        }
+
             const auto result=ReadTexture<Rgba16>(device.Get(),queue.Get(),streamOutputs[frame].Get());
             for(const auto& pixel:result)Require((pixel.r&0x7c00)!=0x7c00&&
                 (pixel.g&0x7c00)!=0x7c00&&(pixel.b&0x7c00)!=0x7c00,"finite stream output");
@@ -717,17 +838,37 @@ int wmain(int argc,wchar_t** argv) try {
     }
     if(mode==1||mode==2){
         const auto count=applied()-initiallyApplied;
-        const bool coverage=(scenario==L"stream"||scenario==L"scale_stream")&&frames>3
+        if(rejectCase&&rejectStage==3){
+            Require(count==rejectFrame&&faults()==1,"abort quarantine contract");
+            std::printf("NativeExpectedFault verified=1 applied=%llu faults=%u debug_clean=1\n",
+                static_cast<unsigned long long>(count),faults());
+            // A deliberately quarantined owner is retained until process exit;
+            // the runner validates this named terminal outcome, not a clean drain.
+            throw std::runtime_error("expected abort quarantine");
+        }
+        const bool coverage=scenario==L"model_cycle"?count>=frames:(scenario==L"stream"||scenario==L"scale_stream")&&frames>3
             ?count>=3&&count<=frames
             :count==((scenario==L"scope"||scenario==L"subrect_bypass"||scenario==L"bundle_bypass"||scenario==L"unknown_motion_state"||scenario==L"wrapper_bypass"||scenario==L"motion32_bypass")?0u:
-                scenario==L"toggle"?frames-2:frames+(scenario==L"resize"?2u:scenario==L"drs"?4u:0u));
+                scenario==L"toggle"?frames-2:frames+(scenario==L"resize"?2u:scenario==L"drs"?4u:0u)-(rejectCase?1u:0u));
         Require(coverage&&!faults(),"native processing coverage");
     }
     if(reference)reference->Close();
+    if(postCopy){
+        const auto copies=Entry<Count64>(module,"DlssNrNativeTestPostDrawCopies")();
+        std::printf("NativePostDraw observed=%llu expected=%u\n",static_cast<unsigned long long>(copies),frames+((mode==1||mode==2)?1u:0u));
+        Require(copies==frames+((mode==1||mode==2)?1u:0u),"only original game Draw invokes copy listener");
+        Require(Entry<Count64>(module,"DlssNrNativeTestPostDrawPrivate")()==0,"private replay bypasses copy listener");
+        std::printf("NativePostDraw copies=%llu private_listener_reentry=0\n",static_cast<unsigned long long>(copies));
+        Require(postCopy(nullptr,nullptr,nullptr)==1,"post-draw resources released");
+    }
     Require(release(handle)==NVSDK_NGX_Result_Success,"NGX D3D12 release feature");
     Require(destroy(params)==NVSDK_NGX_Result_Success,"NGX D3D12 destroy parameters");
     Require(shutdown()==NVSDK_NGX_Result_Success,"NGX D3D12 shutdown");
     if(mode==1||mode==2){for(unsigned i=0;i<2000&&pending();++i)Sleep(5);Require(!pending()&&!faults(),"native clean drain");}
+    if(GetEnvironmentVariableW(L"NR_HOST_EXPECT_COMPANION_RETAINED",nullptr,0)){
+        Require(GetModuleHandleW(L"dlssnr_hip_scheduled_bridge.dll")!=nullptr,"HIP companion retained after clean session teardown");
+        std::printf("NativeCompanion retained_after_drain=1\n");
+    }
     std::printf("NativeCoverage mode=%u applied=%llu debug_clean=1 debug_layer=%u\n",mode,static_cast<unsigned long long>(applied()-initiallyApplied),debugEnabled?1u:0u);
     std::printf("PASS OptiScaler native DX12 Evaluate source=%ux%u output=%ux%u frames=%u sha256=%s finite=1\n",
         width,height,width*outputScale,height*outputScale,frames,Sha256(all.data(),all.size()*sizeof(Rgba16)).c_str());

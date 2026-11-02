@@ -9,6 +9,7 @@
 #include "DlssNr_Placement.h"
 #include "NrBackendSelection.h"
 #include "native/NativeAdapter.h"
+#include "native/NativeModelSelection.h"
 #include <Config.h>
 #include <menu/menu_common.h>
 #include <algorithm>
@@ -206,7 +207,29 @@ void RenderMenu(Config* config, float menuResScale)
                          SelectNrBackend(featureDevice, config->DlssNrBackend.value_or_default()) ==
                              NrBackendSelection::AmdHip;
         if (hip)
+        {
+            const auto model=config->DlssNrHipModel.value_or_default();
+            const char* label=model=="b"?"Model B":model=="a"?"Model A":"Auto (recommended)";
+            if(ImGui::BeginCombo("NR model",label))
+            {
+                for(const auto& choice:{std::pair{"auto","Auto (recommended)"},std::pair{"b","Model B"},std::pair{"a","Model A"}})
+                {
+                    const bool available=std::strcmp(choice.first,"auto")==0||Native::PackagePresent(Native::ModelPath(std::strcmp(choice.first,"b")==0?2:1));
+                    ImGui::BeginDisabled(!available);
+                    if(ImGui::Selectable(choice.second,model==choice.first))config->DlssNrHipModel=std::string(choice.first);
+                    ImGui::EndDisabled();
+                    if(!available&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip("Prepare this model with the installer. Model B requires NR 310.9.16.0.");
+                    else if(available&&ImGui::IsItemHovered())
+                        ImGui::SetTooltip(std::strcmp(choice.first,"auto")==0?"Uses Model B when installed, otherwise Model A.":
+                            std::strcmp(choice.first,"b")==0?"Newer, faster network. Available in NR 310.9.16.0.":
+                            "Original network. Available in NR 310.8.0.0 and 310.9.16.0.");
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::TextDisabled("Selected model: %s",Native::SelectedModelName());
             ImGui::TextDisabled("HIP supports one pass before or after upscale on gfx1030.");
+        }
         if (featureDevice)
         {
             const auto active = SelectNrBackend(featureDevice, config->DlssNrBackend.value_or_default());
@@ -221,13 +244,17 @@ void RenderMenu(Config* config, float menuResScale)
         const float toggleRight = ImGui::GetCursorPosX() + toggleWidth + toggleGap;
         bool enabled = config->DlssNrEnabled.value_or_default();
         if (PipelineUi::CheckboxWrapped("Enable Neural Rendering", &enabled, toggleWidth))
+        {
             config->DlssNrEnabled = enabled;
+        }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Enable NR processing.");
 
         bool applyModel = config->DlssNrApplyModel.value_or_default();
         if (PipelineUi::CheckboxWrapped("Apply model", &applyModel, toggleWidth))
+        {
             config->DlssNrApplyModel = applyModel;
+        }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Show or hide the NR effect. The model still runs when hidden.\nDisable Enable Neural "
                               "Rendering to stop its GPU cost.");

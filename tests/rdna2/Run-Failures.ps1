@@ -1,13 +1,24 @@
 param([Parameter(Mandatory=$true)][string]$ModelPath,
       [string]$FrontendPath='',
+      [string]$OutputRoot='',
       [string]$CompanionPath='')
 $ErrorActionPreference='Stop'
 $root=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-$out=Join-Path $root 'build/tests/rdna2'
+$hostRoot=Join-Path $root 'build/tests/rdna2'
+$out=if($OutputRoot){[IO.Path]::GetFullPath($OutputRoot)}else{$hostRoot}
+New-Item -ItemType Directory -Force -Path $out | Out-Null
 $model=(Resolve-Path -LiteralPath $ModelPath).Path
+$inputHeader = [IO.File]::OpenRead($model)
+try { $header = New-Object byte[] 128; if ($inputHeader.Read($header,0,128) -ne 128) { throw 'Model header truncated.' } }
+finally { $inputHeader.Dispose() }
+$graph = [BitConverter]::ToUInt32($header,8)
+if ($graph -notin @(1,2)) { throw 'Unsupported model graph.' }
+$modelSetting = if ($graph -eq 2) { 'ModelBPath' } else { 'ModelPath' }
+$modelChoice = if ($graph -eq 2) { 'b' } else { 'a' }
+
 $frontend=if($FrontendPath){(Resolve-Path -LiteralPath $FrontendPath).Path}else{Join-Path $root 'x64/Release/OptiScaler.dll'}
 $companion=if($CompanionPath){(Resolve-Path -LiteralPath $CompanionPath).Path}else{Join-Path $root 'build/hip-gfx1030/dlssnr_hip_scheduled_bridge.dll'}
-$hostExe=Join-Path $out 'optiscaler_dx12_evaluate_host.exe'
+$hostExe=Join-Path $hostRoot 'optiscaler_dx12_evaluate_host.exe'
 $raw=Join-Path $out 'synthetic_160x90.rgba.f16'
 if(-not(Test-Path -LiteralPath $raw)){throw 'Run-Smoke.ps1 once to create the deterministic input'}
 
@@ -29,7 +40,7 @@ foreach($case in @('missing-model','corrupt-model','missing-companion')){
         if(Test-Path -LiteralPath $package){Remove-Item -LiteralPath $package -Force}
     }
     @('[Upscalers]','Dx12Upscaler=fsr22_12','[DLSS]','Enabled=false','[DlssNr]',
-      'Enabled=true','Backend=4',"ModelPath=$package",'RunBeforeSR=true',
+      'Enabled=true','Backend=4',"${modelSetting}=$package","HipModel=$modelChoice",'RunBeforeSR=true',
       'Style=2','LocalTone=1','LocalStructure=1','SkinStructure=-1',
       'Intensity=1','TemporalAccumulation=true','WorkingScale=1','ApplyModel=true',
       '[Hotfix]','ColorResourceBarrier=64','OutputResourceBarrier=8',
@@ -55,7 +66,7 @@ foreach($case in @('missing-model','corrupt-model','missing-companion')){
         $log=$stdout.Result+"`n"+$stderr.Result
         $log | Set-Content -LiteralPath (Join-Path $out "$case.log")
         $expected=if($case -eq 'missing-companion'){'companion could not load'}
-                  elseif($case -eq 'corrupt-model'){'model package (size invalid|rejected)'}
+                  elseif($case -eq 'corrupt-model'){'model package (size|header|rejected)'}
                   else{'model package missing or unreadable'}
         if($process.ExitCode -eq 0 -or $log -notmatch $expected){
             throw "$case did not fail with its own cause (exit $($process.ExitCode))"

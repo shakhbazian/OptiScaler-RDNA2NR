@@ -26,7 +26,7 @@ auto DlssNr_Dx12::State::ReleaseSurfacesIfFormatChanged(DXGI_FORMAT modelFormat,
     std::fill(std::begin(nr.passCreateFailed), std::end(nr.passCreateFailed), false);
     modelRunning = false;
 
-    for (ID3D12Resource** r : { &nr.output, &nr.passScratch, &nr.passClamp, &nr.colorCopy, &nr.hdrCopy, &nr.colorSmall,
+    for (ID3D12Resource** r : { &nr.output, &nr.passScratch, &nr.passClamp, &nr.colorCopy, &nr.hdrCopy, &nr.colorSmall, &nr.depthSmall, &nr.motionSmall,
                                 &nr.outputNative, &nr.activeColor })
         ParkNrResource(*r);
 
@@ -242,7 +242,7 @@ auto DlssNr_Dx12::State::ReleaseResources() -> void
     modelRunning = false;
 
     for (auto** resource :
-         { &nr.output, &nr.passScratch, &nr.passClamp, &nr.colorCopy, &nr.hdrCopy, &nr.activeColor, &nr.colorSmall })
+         { &nr.output, &nr.passScratch, &nr.passClamp, &nr.colorCopy, &nr.hdrCopy, &nr.activeColor, &nr.colorSmall, &nr.depthSmall, &nr.motionSmall })
         ParkNrResource(*resource);
     ReleaseSpatialResources();
     nr.spatialSignatureValid = false;
@@ -264,7 +264,6 @@ auto DlssNr_Dx12::State::ReleaseResources() -> void
 
     ParkNrResource(nr.motionClone);
 
-    captureFrames.release();
     if (auto* timer = gpuTime.release())
         lifetime.Retire([timer] { delete timer; });
     if (auto* timer = ngxTime.release())

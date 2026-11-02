@@ -83,9 +83,9 @@ Before publishing source changes, run `python tools/check_release_source.py`. It
 These tests execute the source-built hosts and HIP backend on the GPU, outside a game. They need the compatible AMD runtime and a private model package. Start with:
 
 ```powershell
-.\tests\rdna2\Run-Smoke.ps1 -ModelPath "D:\Models\NR\mixed-v5-gfx1030.nrwgt"
-.\tests\rdna2\Run-Dx11.ps1 -ModelPath "D:\Models\NR\mixed-v5-gfx1030.nrwgt"
-.\tests\rdna2\Run-Failures.ps1 -ModelPath "D:\Models\NR\mixed-v5-gfx1030.nrwgt"
+.\tests\rdna2\Run-Smoke.ps1 -ModelPath "D:\Models\NR\nr-model-a-gfx1030.nrwgt"
+.\tests\rdna2\Run-Dx11.ps1 -ModelPath "D:\Models\NR\nr-model-a-gfx1030.nrwgt"
+.\tests\rdna2\Run-Failures.ps1 -ModelPath "D:\Models\NR\nr-model-a-gfx1030.nrwgt"
 ```
 
 The smoke test builds the hosts and binaries, produces deterministic input, and checks pre/post NR against independent colour-codec and executor results. The other two commands reuse its generated input. Smoke scenarios also cover queue switching, resize, forwarding wrappers and selected formats; consult `Run-Smoke.ps1` for its accepted `-Scenario` values. Host correctness does not establish game compatibility or agreement with NVIDIA hardware.
@@ -99,3 +99,25 @@ To keep large build artifacts outside the checkout, both build scripts accept `-
 The standard frontend build explicitly disables FG transition tracing and native test exports. The packager rejects trace binaries, diagnostic exports, enabled default watermarks and machine-specific FSR paths. See the [tool inventory](../tools/README.md) for build helpers and source-only tests.
 
 For performance work, compare paired, uninstrumented full-frame runs. Treat stage profiling as a diagnostic aid, because instrumentation can alter the measured workload.
+
+## Model A/B integration check
+
+The smoke, DX11 and failure helpers accept either supported model package and
+select its graph from the header. Use `-OutputRoot` to keep stages and outputs
+on a spacious disk. The D3D12 host compares the common frontend with an
+independent codec path using the same selected package.
+
+`tests/rdna2/Run-ModelIntegration.ps1` runs the full A/B qualification: pre/post
+processing, 720p and 4K admission, reduced NR scale, formats, wrappers, queue and
+size changes, DX11-on-12, failures, and live B → A → Auto selection. Supply
+`-ModelA`, `-ModelB`, `-Frontend`, `-DiagnosticFrontend`, `-Companion` and
+`-OutputRoot`. The diagnostic frontend is built with `-NativeTestHooks`; keep
+its output separate from the product DLL. Packaging rejects its test exports.
+
+The model catalog is shared by the converter and installer. After changing
+`tools/model_converter/model_catalog.json`, regenerate the C++ copy with:
+
+```powershell
+python tools/model_converter/model_profiles.py --write-catalog-header rdna2_nr/include/nr_model_catalog.h
+python tests/rdna2/test_model_profiles.py
+```

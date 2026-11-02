@@ -1,9 +1,10 @@
-"""Own bounded logical-weight provider for the pinned 71-block candidate graph."""
+"""Decode bounded weight records for the supported original and optimized graphs."""
 import numpy as np
 from model_schemas import CHANNELS,schemas
 from qmma_layout import decode_e4m3,unpack
 from research_layouts import bias_offsets,hmma_offsets,n128_offsets
 from weights_ht import load_file
+from model_profiles import select_profile
 
 
 def semantic_qkv(interleaved, heads):
@@ -18,12 +19,23 @@ def semantic_qkv(interleaved, heads):
 
 
 class ModelWeightProvider:
-    def __init__(self,source_path,expected_sha256):
-        self.selection,self.data,_,records=load_file(source_path,expected_sha256)
+    def __init__(self,source_path,expected_sha256,model='original'):
+        self.profile=select_profile(expected_sha256,model)
+        self.selection,self.data,resource,records=load_file(source_path,expected_sha256,self.profile.resource)
+        if resource['sha256'] != self.profile.resource_sha:
+            raise ValueError('Model resource SHA-256 mismatch')
         self.records={r['name']:r for r in records};self.contract=schemas()
+        self.layout_to_block={template:block for block,template in enumerate(self.profile.templates)}
+        expected={f'block{block}.'+name.split('.',1)[1]
+                  for block,template in enumerate(self.profile.templates)
+                  for name in self.contract if name.startswith(f'block{template}.')}
+        if set(self.records) != expected:
+            raise ValueError('Model record manifest mismatch')
 
     def record(self,name):
-        record=self.records[name];start=record['sourceOffset'];payload=memoryview(self.data)[start:start+record['byteLength']]
+        template=int(name.split('.',1)[0][5:])
+        source_name=f'block{self.layout_to_block[template]}.'+name.split('.',1)[1]
+        record=self.records[source_name];start=record['sourceOffset'];payload=memoryview(self.data)[start:start+record['byteLength']]
         result={};offset=0
         for role,dtype,shape,layout in self.contract[name]:
             count=int(np.prod(shape));unit={'e4m3fn':1,'zero':1,'fp16':2,'fp32':4}[dtype]
@@ -45,6 +57,7 @@ class ModelWeightProvider:
         return result
 
     def __call__(self,block):
+        block=self.profile.templates[block]
         if block in CHANNELS:
             c=CHANNELS[block];s=self.record(f'block{block}.layer0.layer');heads=c//32
             result={'family':'simple32' if c==32 else 'branched','ffn_cos':s['ffn_cos_skip'],

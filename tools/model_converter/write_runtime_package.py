@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from model_weight_provider import ModelWeightProvider
+from model_profiles import PROFILES, PACKAGES
 
 
 HEADER_SIZE = 128
@@ -24,7 +25,7 @@ PACKAGE_BYTES = 291595458
 
 
 def iter_tensors(provider):
-    for block in range(71):
+    for block in range(provider.profile.blocks):
         weights = provider(block)
         values = {}
         for source_role in (key for key in weights if key != 'family'):
@@ -34,11 +35,11 @@ def iter_tensors(provider):
                 role = 'effective_attention_scale'
                 value = np.asarray(value, np.float32) * np.float32(np.sqrt(32))
             values[role] = np.ascontiguousarray(value, dtype='<f2')
-        if block == 70:
-            scalar = provider.records['block70.layer0.blend_scale']
+        if block == provider.profile.blocks-1:
+            scalar = provider.records[f'block{block}.layer0.blend_scale']
             start = scalar['sourceOffset']
             raw = provider.data[start:start + scalar['byteLength']]
-            if raw != bytes.fromhex('eb39'):
+            if raw != bytes.fromhex(provider.profile.blend_hex):
                 raise ValueError('Unexpected temporal blend scalar')
             values['temporal_blend_scale'] = np.frombuffer(raw, '<f2')
         for role in sorted(values):
@@ -94,6 +95,7 @@ def main():
     parser.add_argument('--source', required=True, type=Path, help='your original nvngx_dlssnr.dll')
     parser.add_argument('--output', required=True, type=Path, help='destination .nrwgt file')
     parser.add_argument('--report', type=Path, help='optional JSON receipt (no weight data)')
+    parser.add_argument('--model', choices=PROFILES, default='original')
     args = parser.parse_args()
     output = args.output
     if args.source.resolve() == output.resolve():
@@ -102,7 +104,8 @@ def main():
     # A short sibling avoids Windows MAX_PATH surprises in deeply nested games.
     temporary = output.parent / ('nr-' + uuid.uuid4().hex + '.tmp')
 
-    provider = ModelWeightProvider(args.source, SOURCE_SHA256)
+    source_digest = file_digest(args.source).hex().upper()
+    provider = ModelWeightProvider(args.source, source_digest, args.model)
     entries, file_size = metadata(provider)
     table = b''.join(entry_bytes(value) for value in entries)
     table_hash = hashlib.sha256(table).digest()
@@ -138,7 +141,7 @@ def main():
         if current != file_size:
             raise ValueError('Package size calculation mismatch')
         header = struct.pack(
-            '<8sIIQII32s32s32s', b'NRWGT001', 1, 1, file_size,
+            '<8sIIQII32s32s32s', b'NRWGT001', provider.profile.graph, 1, file_size,
             len(entries), ENTRY_SIZE, source_hash, table_hash, payload_hash.digest(),
         )
         if len(header) != HEADER_SIZE:
@@ -149,13 +152,16 @@ def main():
         os.fsync(stream.fileno())
 
     package_hash = file_digest(temporary)
-    if file_size != PACKAGE_BYTES or package_hash.hex().upper() != PACKAGE_SHA256:
+    if (file_size, package_hash.hex().upper()) != PACKAGES[(source_digest, args.model)]:
         temporary.unlink(missing_ok=True)
         raise ValueError('converted package does not match the runtime contract')
     temporary.replace(output)
     report = {
         'contract': 'runtime-weight-package-build-v1',
         'format': 'NRWGT001',
+        'model': provider.profile.name,
+        'graphVersion': provider.profile.graph,
+        'resourceSha256': provider.profile.resource_sha,
         'path': str(output.resolve()),
         'byteLength': file_size,
         'sha256': package_hash.hex().upper(),

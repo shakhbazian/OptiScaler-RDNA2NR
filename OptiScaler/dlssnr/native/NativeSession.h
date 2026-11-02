@@ -13,7 +13,7 @@ struct Intent {
     std::shared_ptr<void> frontendLease;
     NrV2::Controls controls{};
     NrV2::Motion motionParameters{};
-    std::uint64_t sourceFrame=0,feature=0;
+    std::uint64_t sourceFrame=0,feature=0,modelRevision=0;
     unsigned width=0,height=0,motionWidth=0,motionHeight=0;
     D3D12_RESOURCE_STATES colorState=D3D12_RESOURCE_STATE_COMMON,motionState=D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES outputState=D3D12_RESOURCE_STATE_COMMON;
@@ -27,7 +27,8 @@ struct NativeBatch final : NativeQueue::Prepared {
     bool repeated=false;
     NativeQueue::Result Submit(ID3D12CommandQueue*,UINT,ID3D12CommandList* const*,NativeQueue::Execute) noexcept override;
 };
-void SetAssetPaths(std::wstring dll,std::wstring package);
+void SetAssetPaths(std::wstring dll,std::wstring package,unsigned graph);
+std::uint64_t AssetRevision() noexcept;
 bool WarmSession(ID3D12Device*,ID3D12CommandQueue*,unsigned,unsigned,std::uint64_t,bool) noexcept;
 std::uint64_t AppliedFrames() noexcept;
 std::uint64_t BypassedFrames() noexcept;

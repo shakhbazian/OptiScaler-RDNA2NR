@@ -9,6 +9,7 @@ class FFXFeatureDx12 : public FFXFeature, public IFeature_Dx12
 {
   private:
     ID3D12Resource* smallerColor[2];
+    CustomFfxModule* _customUpscaler = nullptr;
 
     NVSDK_NGX_Parameter* SetParameters(NVSDK_NGX_Parameter* InParameters);
 
@@ -16,7 +17,7 @@ class FFXFeatureDx12 : public FFXFeature, public IFeature_Dx12
     bool InitFFX(const NVSDK_NGX_Parameter* InParameters);
 
   public:
-    FFXFeatureDx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters);
+    FFXFeatureDx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters, const std::string& customUpscaler = "");
 
     bool InitInternal(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters) override;
     bool EvaluateInternal(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX_Parameter* InParameters) override;

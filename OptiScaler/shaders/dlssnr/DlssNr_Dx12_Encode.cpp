@@ -281,6 +281,7 @@ DlssNrConstants DlssNr_Dx12::State::MakeResolveConstants(const EncodeContext& co
 
     resolveParams.ReplaceDetailStrength = cfg.DlssNrReplaceDetailStrength.value_or_default();
     resolveParams.ModelWorkScale = context.workScale;
+    DlssNr_Common::SetQualityConstants(resolveParams, cfg);
 
     // Report the effective composition settings when they change.
 
@@ -307,7 +308,8 @@ DlssNrConstants DlssNr_Dx12::State::MakeResolveConstants(const EncodeContext& co
                  "{:.1f}x, colour transform {}, transfer {}, model {}x{}, passes {}, debug view {}, compare {}",
                  composeNow.whitePoint, composeNow.transfer, composeNow.colour, composeNow.maxRatio,
                  composeNow.passthrough != 0 ? "off (frame already tone mapped)" : "on (linear HDR)",
-                 composeNow.residual == 3   ? "lighting + colour"
+                 composeNow.residual == 5   ? "edge-aware"
+                 : composeNow.residual == 3 ? "lighting + colour"
                  : composeNow.residual == 1 ? "matched residual"
                                             : "classic",
                  composeNow.workW, composeNow.workH, composeNow.passes, composeNow.debugView, composeNow.compareMode);

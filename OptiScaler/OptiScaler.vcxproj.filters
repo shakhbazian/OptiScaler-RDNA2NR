@@ -179,6 +179,9 @@
     <ClInclude Include="inputs\FSR3_Dx12.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="scanner\rtti.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="scanner\scanner.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -524,9 +527,6 @@
     <ClInclude Include="inputs\FG\FfxApi_Dx12_FG.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="fsr4\FSR4ModelSelection.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="inputs\FG\FSR3_Dx12_FG.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -847,6 +847,15 @@
     <ClInclude Include="hooks\Amdxc64_Hooks.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="fsr4\FSR4DriverProvider.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="fsr4\FSR4Models.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="fsr4\FSR4Presets.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="fsr4\FSR4Upgrade.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1120,6 +1129,9 @@
     <ClCompile Include="inputs\FSR3_Dx12.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="scanner\rtti.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="scanner\scanner.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1280,9 +1292,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="inputs\FG\FfxApi_Dx12_FG.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="fsr4\FSR4ModelSelection.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="inputs\FG\FSR3_Dx12_FG.cpp">
@@ -1468,6 +1477,15 @@
     <ClCompile Include="hooks\Amdxc64_Hooks.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="fsr4\FSR4DriverProvider.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="fsr4\FSR4Models.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="fsr4\FSR4Presets.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="fsr4\FSR4Upgrade.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1640,8 +1658,6 @@
     <ClInclude Include="dlssnr\DlssNr.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="dlssnr\DlssNr_Readback.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="dlssnr\DlssNr_Image_Vk.h"><Filter>Header Files</Filter></ClInclude>
-    <ClInclude Include="dlssnr\DlssNr_Capture.h"><Filter>Header Files</Filter></ClInclude>
-    <ClInclude Include="dlssnr\DlssNr_PipelineCapture.h"><Filter>Header Files</Filter></ClInclude>
     <ClCompile Include="dlssnr\DlssNr_GpuLifetime.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClInclude Include="dlssnr\DlssNr_GpuLifetime.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="dlssnr\DlssNr_HoldParameters_Dx12.h"><Filter>Header Files</Filter></ClInclude>
@@ -1664,6 +1680,7 @@
     <ClInclude Include="dlssnr\DlssNr_ModelParameters.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="shaders\dlssnr\DlssNr_ActiveColor.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="dlssnr\WorkingResolution.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\ModelGuideContract.h"><Filter>Header Files</Filter></ClInclude>
     <ClCompile Include="shaders\dlssnr\DlssNr_Dx12.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClInclude Include="shaders\dlssnr\DlssNr_GpuTime.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="shaders\dlssnr\DlssNr_Guides.h"><Filter>Header Files</Filter></ClInclude>

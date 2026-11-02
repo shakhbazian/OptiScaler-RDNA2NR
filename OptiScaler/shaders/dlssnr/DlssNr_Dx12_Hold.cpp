@@ -107,19 +107,3 @@ auto DlssNr_Dx12::State::BeginInputHold(ID3D12GraphicsCommandList* cmd, NVSDK_NG
     inputHold.active = true;
     inputHold.parameters.Apply(params);
 }
-
-auto DlssNr_Dx12::State::CheckCaptureTrigger() -> void
-{
-    if ((frames % 60) != 0)
-        return;
-
-    std::error_code ec;
-    const auto trigger = Util::DllPath().remove_filename() / "dlssnr-capture.trigger";
-
-    if (std::filesystem::exists(trigger, ec))
-    {
-        std::filesystem::remove(trigger, ec);
-        captureFrames.request(capture::kMaxFrames);
-        LOG_INFO("DLSS-NR capture requested by trigger file");
-    }
-}

@@ -44,8 +44,8 @@ def file_offset(sections, rva, size):
     return matches[0]
 
 
-def locate_resource(data):
-    """Strict PE32+ resource lookup for RCDATA/WEIGHTS_HT/one language."""
+def locate_resource(data, resource_name='WEIGHTS_HT'):
+    """Strict PE32+ lookup for one named RCDATA resource and one language."""
     r = Reader(data)
     if r.span(0, 2) != b'MZ':
         raise ValueError('missing MZ')
@@ -105,10 +105,10 @@ def locate_resource(data):
             if length > 256:
                 raise ValueError('oversized resource name')
             text = bytes(tree.span(offset + 2, length * 2)).decode('utf-16le')
-            if text == 'WEIGHTS_HT':
+            if text == resource_name:
                 named.append(target)
     if len(named) != 1:
-        raise ValueError('expected one WEIGHTS_HT entry')
+        raise ValueError(f'expected one {resource_name} entry')
     languages = entries(subdirectory(named[0]))
     if len(languages) != 1:
         raise ValueError('expected one resource language')
@@ -121,7 +121,7 @@ def locate_resource(data):
         raise ValueError('invalid resource size')
     offset = file_offset(sections, rva, size)
     r.span(offset, size)
-    return {'path': ['RCDATA', 'WEIGHTS_HT', language], 'rva': rva,
+    return {'path': ['RCDATA', resource_name, language], 'rva': rva,
             'fileOffset': offset, 'byteLength': size,
             'sha256': digest(r.span(offset, size))}
 
@@ -179,7 +179,7 @@ def parse_records(data, source_offset=0):
     return records
 
 
-def load_file(path, expected_sha256):
+def load_file(path, expected_sha256, resource_name='WEIGHTS_HT'):
     """Read a user-selected DLL as data; never load or execute it."""
     path = Path(path)
     selection = {'path': str(path), 'sha256': expected_sha256}
@@ -188,7 +188,7 @@ def load_file(path, expected_sha256):
     data = path.read_bytes()
     if digest(data) != selection['sha256']:
         raise ValueError('unsupported source DLL (SHA-256 does not match this runtime)')
-    resource = locate_resource(data)
+    resource = locate_resource(data, resource_name)
     start = resource['fileOffset']
     payload = memoryview(data)[start:start + resource['byteLength']]
     records = parse_records(payload, start)

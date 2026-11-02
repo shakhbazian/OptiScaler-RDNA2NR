@@ -1,5 +1,6 @@
 #include "pch.h"
 #include <dlssnr/DlssNr_StreamlinePicture.h>
+#include <dlssnr/native/NativeAdapter.h>
 #include "DlssNr_Dx12_State.h"
 #include <atomic>
 #include <list>
@@ -13,7 +14,6 @@ namespace
 {
 std::recursive_mutex nrOwnersMutex;
 std::vector<DlssNr_Dx12*> nrOwners;
-std::atomic_uint nrCaptureOutstanding { 0 };
 // Only unresolved work at process teardown is intentionally retained. During the session
 // retired owners stay registered for submission/reset callbacks until they can be reclaimed.
 auto& RetiredNrOwners()
@@ -266,7 +266,6 @@ void DlssNr_Dx12::FinishSubmitted()
     std::lock_guard lock(_state->mutex);
     _state->lifetime.FinishSubmitted();
     _state->deferredSr.lifetime.FinishSubmitted();
-    _state->captureFrames.FinishSubmitted();
     if (_state->enlarger)
         _state->enlarger->lifetime.FinishSubmitted();
     for (auto& old : _state->retiredEnlargers)
@@ -393,6 +392,8 @@ bool DlssNr_Dx12::CreateBufferResource(ID3D12Device* device, ID3D12Resource* sou
     // scratch is not wrapped: keeping that flag makes D3D12 ignore its UAV
     // initial state and invalidates our first transition.
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    if (state & D3D12_RESOURCE_STATE_RENDER_TARGET)
+        desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
     const auto retryGeneration = DlssNr::ReadControlRequests().retryGeneration;
     if (_state->bufferGeneration != retryGeneration)
     {
@@ -517,137 +518,6 @@ bool DlssNr_Dx12::ProcessSeam(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Paramete
     }
     _state->Publish();
     return special;
-}
-void DlssNr_Dx12::DiagnosePipeline(unsigned stage, ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params,
-                                   ID3D12Resource* color, uint32_t flags, bool rr, bool success)
-{
-    std::lock_guard ownersLock(nrOwnersMutex);
-    std::lock_guard stateLock(_state->mutex);
-    auto& state = *_state;
-    if (stage == 0)
-    {
-        state.lifetime.Collect();
-        static bool previousGameplay = false, previousPhoto = false;
-        static unsigned runs = 0;
-        DWORD foregroundProcess = 0;
-        GetWindowThreadProcessId(GetForegroundWindow(), &foregroundProcess);
-        const bool control = foregroundProcess == GetCurrentProcessId() && (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-        const bool gameplay = control && (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
-        const bool photo = control && (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
-        const char* label = gameplay && !previousGameplay ? "gameplay"
-                            : photo && !previousPhoto     ? "photomode"
-                                                          : nullptr;
-        previousGameplay = gameplay;
-        previousPhoto = photo;
-        if (label && !state.pipelineCaptureRemaining && !nrCaptureOutstanding)
-        {
-            if (runs >= 2)
-                LOG_WARN("NR pipeline capture: two-run limit reached; restart to capture again");
-            else
-            {
-                ++runs;
-                SYSTEMTIME time {};
-                GetLocalTime(&time);
-                char folder[100];
-                std::snprintf(folder, sizeof(folder), "%04u%02u%02u-%02u%02u%02u-%03u-%s-%u", time.wYear, time.wMonth,
-                              time.wDay, time.wHour, time.wMinute, time.wSecond, time.wMilliseconds, label, runs);
-                state.pipelineCaptureDirectory = Util::DllPath().parent_path() / "nr-pipeline-captures" / folder;
-                state.pipelineCaptureRemaining = 4;
-                LOG_INFO("NR pipeline capture armed: {} (four frames)", state.pipelineCaptureDirectory.string());
-            }
-        }
-        if (!state.pipelineCaptureRemaining || state.pipelineCapture)
-            return;
-        auto job = std::make_unique<DlssNr::PipelineCaptureFrame>();
-        if (!job->Init(_device))
-        {
-            state.pipelineCaptureRemaining = 0;
-            LOG_ERROR("NR pipeline capture allocation failed");
-            return;
-        }
-        job->directory = state.pipelineCaptureDirectory / std::to_string(4 - state.pipelineCaptureRemaining);
-        job->metadata << "stage_semantics before_nr=scene_linear_input after_nr=NR_composed_RR_input "
-                         "after_rr=upscaler_output_before_postprocessing\n"
-                      << "game_frame " << ::State::Instance().frameCount << " command_list " << cmd << " parameters "
-                      << params << " rr " << rr << " feature_flags " << flags << '\n';
-        const auto& cfg = *Config::Instance();
-        job->metadata << "nr_passes " << cfg.DlssNrPasses.value_or_default() << " working_scale "
-                      << cfg.DlssNrWorkingScale.value_or_default() << " nr_history_reset " << state.nr.reset << " hold "
-                      << cfg.DlssNrHoldFrame.value_or_default() << '\n';
-        for (const char* key :
-             { NVSDK_NGX_Parameter_Reset, NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width,
-               NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, NVSDK_NGX_Parameter_OutWidth,
-               NVSDK_NGX_Parameter_OutHeight, NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_X,
-               NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_Y, NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X,
-               NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y })
-        {
-            unsigned value = 0;
-            auto result = params->Get(key, &value);
-            job->metadata << key << ' ' << value << " get_result " << unsigned(result) << '\n';
-        }
-        for (const char* key :
-             { NVSDK_NGX_Parameter_MV_Scale_X, NVSDK_NGX_Parameter_MV_Scale_Y, NVSDK_NGX_Parameter_Jitter_Offset_X,
-               NVSDK_NGX_Parameter_Jitter_Offset_Y, NVSDK_NGX_Parameter_DLSS_Pre_Exposure,
-               NVSDK_NGX_Parameter_DLSS_Exposure_Scale, NVSDK_NGX_Parameter_FrameTimeDeltaInMsec })
-        {
-            float value = 0;
-            auto result = params->Get(key, &value);
-            job->metadata << key << ' ' << value << " get_result " << unsigned(result) << '\n';
-        }
-        // Record descriptors of optional RR inputs without assuming their presence.
-        for (const char* key : { "DLSS.Input.DiffuseAlbedo", "DLSS.Input.SpecularAlbedo", "GBuffer.Normals",
-                                 "GBuffer.Roughness", "MotionVectorsReflection", "DLSSD.SpecularHitDistance",
-                                 "DLSS.Input.ColorBeforeParticles", "DLSSD.DiffuseHitDistance" })
-        {
-            auto* resource = state.GetResource(params, key, key);
-            job->metadata << key << " resource " << resource;
-            if (resource)
-            {
-                auto desc = resource->GetDesc();
-                job->metadata << " width " << desc.Width << " height " << desc.Height << " format " << desc.Format;
-            }
-            job->metadata << '\n';
-        }
-        state.pipelineCapture = job.release();
-        ++nrCaptureOutstanding;
-        state.lifetime.Record(cmd);
-        const auto inputs = DlssNr::ResolveInputStates_Dx12(false);
-        state.pipelineCapture->Copy(cmd, _device, "before_nr", color, inputs.color);
-        state.pipelineCapture->Copy(cmd, _device, "motion",
-                                    state.GetResource(params, NVSDK_NGX_Parameter_MotionVectors, "DLSSD.MotionVectors"),
-                                    inputs.motion);
-        state.pipelineCapture->Copy(cmd, _device, "depth",
-                                    state.GetResource(params, NVSDK_NGX_Parameter_Depth, "DLSSD.Depth"), inputs.depth);
-        state.pipelineCapture->Copy(
-            cmd, _device, "exposure",
-            state.GetResource(params, NVSDK_NGX_Parameter_ExposureTexture, "DLSSD.ExposureTexture"), inputs.exposure);
-        return;
-    }
-    auto* job = state.pipelineCapture;
-    if (!job)
-        return;
-    job->metadata << "stage " << stage << " success " << success << '\n';
-    if (stage == 1)
-    {
-        job->metadata << "nr_model_evaluated " << state.modelRunning << '\n';
-        job->Copy(cmd, _device, "after_nr", color, DlssNr::ResolveInputStates_Dx12(false).color);
-        return;
-    }
-    if (success)
-        job->Copy(cmd, _device, "after_rr", color, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    job->End(cmd);
-    state.pipelineCapture = nullptr;
-    --state.pipelineCaptureRemaining;
-    state.lifetime.Retire(
-        [job]
-        {
-            if (job->Write())
-                LOG_INFO("NR pipeline capture saved: {}", job->directory.string());
-            else
-                LOG_WARN("NR pipeline capture discarded or write failed: {}", job->directory.string());
-            delete job;
-            --nrCaptureOutstanding;
-        });
 }
 
 void DlssNr_Dx12::ResetFinishedCommands(ID3D12CommandList* cmd) { _state->FinishedPictureResetCommandList(cmd); }

@@ -15,8 +15,6 @@
 
 #include <dlssnr/DlssNr.h>
 
-#include <dlssnr/DlssNr_Capture.h>
-#include <dlssnr/DlssNr_PipelineCapture.h>
 #include <dlssnr/DlssNr_Proxy.h>
 #include <dlssnr/DlssNr_GpuLifetime.h>
 
@@ -87,10 +85,6 @@ struct DlssNr_Dx12::State
     std::optional<double> lastGpuTime;
 
     // Writes matched before/after frames on request, so comparisons stop depending on video.
-    capture::FrameCapture captureFrames;
-    DlssNr::PipelineCaptureFrame* pipelineCapture = nullptr; // Owned by lifetime retirement after End.
-    std::filesystem::path pipelineCaptureDirectory;
-    unsigned pipelineCaptureRemaining = 0;
 
     unsigned long long frames = 0;
 
@@ -125,8 +119,6 @@ struct DlssNr_Dx12::State
     void BeginInputHold(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params,
                         const D3D12_RESOURCE_STATES* states);
 
-    // Poll dlssnr-capture.trigger beside OptiScaler every 60 evaluations.
-    void CheckCaptureTrigger();
 
     DlssNr::GpuLifetime lifetime;
 
@@ -174,15 +166,16 @@ struct DlssNr_Dx12::State
         ScopedSkipHeapCapture skipHeap;
 
         bool tracking;
-        explicit ScopedNrStateEnvelope(ID3D12GraphicsCommandList* c)
-            : cmd(c), tracking(D3D12Hooks::IsRootSignatureTrackingEnabled())
+        bool restoreGameRoot;
+        explicit ScopedNrStateEnvelope(ID3D12GraphicsCommandList* c, bool restoreRoot = true)
+            : cmd(c), tracking(D3D12Hooks::IsRootSignatureTrackingEnabled()), restoreGameRoot(restoreRoot)
         {
             D3D12Hooks::SetRootSignatureTracking(false);
         }
 
         ~ScopedNrStateEnvelope()
         {
-            if (tracking)
+            if (tracking && restoreGameRoot)
                 D3D12Hooks::RestoreRoot(cmd);
             D3D12Hooks::SetRootSignatureTracking(tracking);
         }
@@ -212,6 +205,8 @@ struct DlssNr_Dx12::State
             ID3D12Resource* accumulatedEdit[2] {};
             unsigned accumulatedIndex = 0;
             bool accumulationReadable = false, accumulationValid = false;
+            bool historyRejection = false;
+            float historyPreExposure = 1.0f;
             bool smallReadable = false, reset = true, failed = false;
             bool rayReconstruction = false, finishedPicture = false, privateRr = false;
             DlssNr::PrivateUpscaler backend = DlssNr::PrivateUpscaler::DLSS;

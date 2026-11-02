@@ -41,10 +41,16 @@ Write-Data $fsr 'test INT8 runtime, not executable'
 # and their real hashes are never changed in the installer or source checkout.
 $SourceHash = Get-Hash $source
 $Fsr4Int8Hash = Get-Hash $fsr
-$ModelRelative = "1\$SourceHash\mixed-v5-gfx1030.nrwgt"
-$model = Join-Path $models $ModelRelative
+$ModelRelative = "1\$SourceHash\nr-model-a-gfx1030.nrwgt"
+$ModelLegacyRelative = "1\$SourceHash\mixed-v5-gfx1030.nrwgt"
+$model = Join-Path $models $ModelLegacyRelative
 Write-Data $model 'test prepared model'
 $PackageHash = Get-Hash $model; $PackageBytes = (Get-Item -LiteralPath $model).Length
+$ReleaseRoot = $release
+$fixtureProfile = [ordered]@{sourceHash=$SourceHash;sourceVersion='test';model='original';graph=1;
+    bytes=$PackageBytes;packageHash=$PackageHash;relative=$ModelRelative;legacyRelative=$ModelLegacyRelative}
+Write-Data (Join-Path $release 'tools/model_converter/model_catalog.json') (ConvertTo-Json -InputObject @($fixtureProfile))
+
 Write-Data (Join-Path $release 'VERSION.txt') 'candidate-test'
 Write-Data (Join-Path $release 'OptiScaler.dll') 'test frontend v1'
 foreach ($relative in $Payload) { Write-Data (Join-Path $release $relative) "bundled fixture $relative" }
@@ -83,6 +89,8 @@ $savedIni = Join-Path $game 'OptiScaler.ini'
 $savedText = [regex]::Replace([IO.File]::ReadAllText($savedIni), '(?m)^([A-Za-z0-9]+)=', '$1 = ')
 [IO.File]::WriteAllText($savedIni, $savedText, [Text.UTF8Encoding]::new($true))
 Install-Product $game $source 'dxgi.dll' $release 'unused' $models $fsr | Out-Host
+Assert ((Get-Hash (Join-Path $models $ModelRelative)) -eq $PackageHash) 'Legacy package was not reused under its canonical name.'
+Assert ((Get-Hash $model) -eq $PackageHash) 'Legacy package was modified during migration.'
 Assert ((Get-Hash $slot) -eq $Fsr4Int8Hash) 'Selected FSR DLL was not copied.'
 Assert-Setting 'Libraries' 'FfxDx12SRPath' 'auto'
 Assert-Setting 'FSR' 'UpscalerIndex' '0'
@@ -169,4 +177,41 @@ foreach ($case in @(
     Assert-Setting 'DlssNr' 'Enabled' 'false'
     Verify-Product $game | Out-Host
 }
-Write-Output 'PASS installer: copying, migration, settings cleanup, update, rollback, verification and uninstall.'
+# A current source prepares both packages and Auto prefers B. The catalog is
+# fixture data here; conversion with real source bytes is checked separately.
+$bRelative = "2/$SourceHash/nr-model-b-gfx1030.nrwgt"
+$bLegacyRelative = "2/$SourceHash/balanced-b-gfx1030.nrwgt"
+$bModel = Join-Path $models $bLegacyRelative
+Write-Data $bModel 'test prepared B model'
+$bHash = Get-Hash $bModel
+$bProfile = [ordered]@{sourceHash=$SourceHash;sourceVersion='test';model='optimized';graph=2;
+    bytes=(Get-Item $bModel).Length;packageHash=$bHash;relative=$bRelative;legacyRelative=$bLegacyRelative}
+Write-Data (Join-Path $release 'tools/model_converter/model_catalog.json') (ConvertTo-Json -InputObject @($fixtureProfile,$bProfile))
+$game = Join-Path $work 'ab-game'
+Write-Data (Join-Path $game 'fixture.exe') 'not executable'
+Install-Product $game $source 'dxgi.dll' $release 'unused' $models | Out-Host
+Assert-Setting 'DlssNr' 'HipModel' 'auto'
+Assert-Setting 'DlssNr' 'ModelPath' (Join-Path $models $ModelRelative)
+Assert-Setting 'DlssNr' 'ModelBPath' (Join-Path $models $bRelative)
+# A fresh install must have the intended user defaults, independently of the
+# earlier update fixture that deliberately preserves different user choices.
+foreach($setting in @(@('FrameGen','Enabled','true'),@('FrameGen','FGInput','FSRFG30'),
+    @('FrameGen','FGOutput','XeFG'),@('DlssNr','Enabled','true'),
+    @('DlssNr','WorkingScale','0.75'),@('DlssNr','Style','0'),
+    @('DlssNr','RunBeforeSR','true'),@('DlssNr','ApplyModel','true'),
+    @('DlssNr','TemporalAccumulation','true'),@('DlssNr','Passes','1'))){
+    Assert-Setting $setting[0] $setting[1] $setting[2]
+}
+$record = Read-Manifest $game
+Assert (@($record.models).Count -eq 2 -and $record.modelSha256 -eq $bHash) 'A/B manifest or primary model differs.'
+Verify-Product $game | Out-Host
+Set-IniValues (Join-Path $game 'OptiScaler.ini') (,@('DlssNr','HipModel','a'))
+Install-Product $game $source 'dxgi.dll' $release 'unused' $models | Out-Host
+Assert-Setting 'DlssNr' 'HipModel' 'a'
+$before = Get-Hash (Join-Path $game 'dxgi.dll')
+Write-Data $bModel 'damaged B cache'
+Expect-Failure { Verify-Product $game } 'model cache differs'
+Expect-Failure { Install-Product $game $source 'dxgi.dll' $release 'unused' $models } 'model cache contains a different file'
+Assert ((Get-Hash (Join-Path $game 'dxgi.dll')) -eq $before) 'Rejected B cache changed the installation.'
+Uninstall-Product $game | Out-Host
+Write-Output 'PASS installer: A/B preparation, saved model selection, damaged-cache rejection, update, rollback, verification and uninstall.'

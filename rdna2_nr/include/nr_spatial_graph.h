@@ -46,7 +46,7 @@ struct SpatialGraphProfile {
     void* stageEventContext = nullptr;
 };
 
-// Persistent, serialized executor for the 71-block FP16 graph. Input and output
+// Persistent, serialized executor for the package's graph. Input and output
 // are device pointers to NHWC half arrays of HxWx16 and HxWx4 elements.
 class SpatialGraphRuntime {
   public:

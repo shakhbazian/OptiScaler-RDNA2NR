@@ -53,7 +53,7 @@ try
     D3D11_SAMPLER_DESC sd {}; sd.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP; sd.MaxLOD=D3D11_FLOAT32_MAX;
     ComPtr<ID3D11SamplerState> sampler; check(device->CreateSamplerState(&sd, &sampler));
-    auto run = [&](const DlssNrConstants& c, const Image& source, const Image& model, const Image& original)
+    auto run = [&](const DlssNrConstants& c, const Image& source, const Image& model, const Image& original, bool motionOutput = false)
     {
         ComPtr<ID3D11Texture2D> textures[4], target, keep, staging;
         ComPtr<ID3D11ShaderResourceView> views[4];
@@ -80,16 +80,59 @@ try
         ctx->CSSetShader(shader.Get(),nullptr,0); ctx->CSSetConstantBuffers(0,1,cb.GetAddressOf());
         ctx->CSSetSamplers(0,1,sampler.GetAddressOf()); ctx->CSSetShaderResources(0,4,srv);
         ctx->CSSetUnorderedAccessViews(0,2,outputs,nullptr); ctx->Dispatch((c.Width+7)/8,(c.Height+7)/8,1);
-        ctx->CopyResource(staging.Get(),target.Get()); D3D11_MAPPED_SUBRESOURCE mapped {};
+        ctx->CopyResource(staging.Get(),motionOutput ? keep.Get() : target.Get()); D3D11_MAPPED_SUBRESOURCE mapped {};
         check(ctx->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped));
         Image result {c.Width,c.Height,std::vector<Pixel>(size_t(c.Width)*c.Height)};
         for (unsigned y=0; y<c.Height; ++y)
             memcpy(result.pixels.data()+y*c.Width, static_cast<char*>(mapped.pData)+y*mapped.RowPitch, c.Width*sizeof(Pixel));
         ctx->Unmap(staging.Get(),0); ctx->ClearState(); return result;
     };
+    // Mode 10 must read active guide regions, never allocation padding, while
+    // preserving vector values for the later NGX unit conversion.
+    Image depth {32,16,std::vector<Pixel>(512,Pixel{-999,0,0,1})};
+    Image motion {40,20,std::vector<Pixel>(800,Pixel{-999,-999,0,1})};
+    for (unsigned y=0;y<5;++y) for(unsigned x=0;x<11;++x)
+    {
+        depth.pixels[(y+2)*32+x+3]={float(x+10*y),0,0,1};
+        motion.pixels[(y+4)*40+x+7]={6.f,-2.f,0,1};
+    }
+    DlssNrConstants guides{};guides.Mode=10;guides.Width=7;guides.Height=3;
+    guides.GuideWidth=11;guides.GuideHeight=5;guides.DebugView=3;guides.CompareMode=2;
+    guides.TransferStrength=11;guides.ColourStrength=5;guides.CompareSwap=7;guides.Transfer=4;
+    guides.MvScaleX=guides.MvScaleY=1;
+    auto guideDepth=run(guides,depth,motion,depth);
+    auto guideMotion=run(guides,depth,motion,depth,true);
+    for(unsigned y=0;y<3;++y) for(unsigned x=0;x<7;++x)
+    {
+        const auto sx=unsigned((x+.5f)*11/7),sy=unsigned((y+.5f)*5/3);
+        expect(guideDepth.pixels[y*7+x].r==float(sx+10*sy),"Matched depth read guide padding or wrong centre");
+        expect(guideMotion.pixels[y*7+x].r==6.f && guideMotion.pixels[y*7+x].g==-2.f,"Matched motion changed units or read padding");
+    }
     Image original {100,8,std::vector<Pixel>(800)};
     for (unsigned y=0; y<8; ++y) for (unsigned x=0; x<100; ++x)
         original.pixels[y*100+x] = x<51 ? Pixel{.024f,.018f,.012f,.4f} : Pixel{.65f,.36f,.24f,.8f};
+    // Game colour can be scene-linear even when the model proxy is SDR. Keep
+    // its highlight headroom and alpha exactly for a neutral edit at every scale.
+    for (unsigned hdr : {0u,1u}) for (unsigned percent : {50u,75u,100u})
+        for (unsigned curve=0;curve<5;++curve)
+        {
+            Image highlights=original;
+            for(size_t i=0;i<highlights.pixels.size();++i)
+                highlights.pixels[i]=i%2 ? Pixel{775.f,12.f,1.5f,.7f} : Pixel{.2f,.4f,.7f,.3f};
+            DlssNrConstants c{};c.Width=100;c.Height=8;c.Mode=DlssNrMode_Encode;
+            c.Passthrough=hdr;c.ReversibleMode=curve;c.WhitePoint=1;c.MaxRatio=8;
+            c.TransferStrength=c.ColourStrength=c.ApplyModel=1;
+            auto full=run(c,highlights,highlights,highlights);
+            auto reduced=c;reduced.Mode=DlssNrMode_Downsample;reduced.Width=percent;reduced.Height=std::max(2u,8*percent/100);
+            auto proxy=run(reduced,full,full,highlights);
+            c.Mode=DlssNrMode_Resolve;
+            for(unsigned transfer:{1u,3u,5u})
+            {
+                c.Transfer=transfer;
+                expect(difference(run(c,proxy,proxy,highlights),highlights)==0,
+                       "Neutral edit lost highlight headroom or alpha");
+            }
+        }
     unsigned cases=0; float worst=0, legacyHalo=0;
     for (unsigned hdr : {0u,1u}) for (unsigned curve=0; curve<5; ++curve)
     {
@@ -134,6 +177,12 @@ try
                     c.Transfer=0;
                     expect(difference(reconstructed,run(c,proxy,answer,original))<1e-6f,"Native/supersampled path changed");
                 }
+                if (hdr && colour==0 && percent<100)
+                {
+                    c.Transfer=5;
+                    expect(difference(run(c,proxy,answer,original),reference)<.0005f,
+                           "Edge-aware enlargement changed a uniform HDR lighting edit");
+                }
                 ++cases;
             }
         }
@@ -146,8 +195,60 @@ try
     Image brightAnswer {25,2,std::vector<Pixel>(50,Pixel{.3f,.2f,.1f,1})};
     expect(difference(run(black,blackProxy,brightAnswer,blackFrame),blackFrame)==0,
            "Relative reconstruction created light at true black");
-    std::printf("PASS: %u resize fixtures; max reconstruction error %.7f, old resize mismatch %.7f\n",cases,worst,legacyHalo);
-    expect(DlssNrSpatialTransfer(2)==1 && DlssNrSpatialTransfer(4)==3 && DlssNrSpatialTransfer(0)==0,
+    black.Transfer=5;
+    expect(difference(run(black,blackProxy,brightAnswer,blackFrame),blackFrame)==0,
+           "Edge-aware enlargement created light at true black");
+
+    // A dark-side edit next to an unchanged bright surface must not spill across the edge.
+    Image edge {32,8,std::vector<Pixel>(256)}, proxy {8,2,std::vector<Pixel>(16)};
+    for (unsigned y=0; y<8; ++y) for (unsigned x=0; x<32; ++x)
+        edge.pixels[y*32+x] = x<16 ? Pixel{.1f,.1f,.1f,.4f} : Pixel{.8f,.8f,.8f,.8f};
+    for (unsigned y=0; y<2; ++y) for (unsigned x=0; x<8; ++x)
+        proxy.pixels[y*8+x] = edge.pixels[x*4];
+    auto answer=proxy, expected=edge;
+    for (auto* img : {&answer,&expected}) for (unsigned y=0; y<img->h; ++y)
+        for (unsigned x=0; x<img->w/2; ++x)
+        {
+            auto& p=img->pixels[y*img->w+x];
+            p.r=p.g=p.b=srgb(linear(p.r)*.5f);
+        }
+    auto ec=black; ec.Width=32; ec.Height=8; ec.Transfer=3;
+    const float smoothError=difference(run(ec,proxy,answer,edge),expected);
+    ec.Transfer=5;
+    const float edgeError=difference(run(ec,proxy,answer,edge),expected);
+    expect(smoothError>.01f && edgeError<.001f, "Edge-aware filter did not stop cross-edge edit leakage");
+    expect(difference(run(ec,proxy,proxy,edge),edge)<1e-6f,"Edge-aware no-edit reconstruction changed the frame");
+    expect(difference(run(ec,edge,expected,edge),expected)<1e-6f,"Edge-aware native-size path changed");
+
+    // Halo correction must lift narrow dark rims while retaining broad shading and alpha.
+    Image haloProxy {64,8,std::vector<Pixel>(512)};
+    for (unsigned y=0; y<8; ++y) for (unsigned x=0; x<64; ++x)
+        haloProxy.pixels[y*64+x]=x<32 ? Pixel{.04f,.04f,.04f,.3f} : Pixel{.7f,.7f,.7f,.9f};
+    const auto broad=modelAnswer(haloProxy,true,.8f,0);
+    auto rims=broad;
+    for (unsigned y=0; y<8; ++y) for (unsigned x=31; x<=34; ++x)
+    {
+        auto& p=rims.pixels[y*64+x];
+        p.r=p.g=p.b=srgb(linear(p.r)*.6f);
+    }
+    DlssNrConstants hc {}; hc.Mode=DlssNrMode_SuppressHalo; hc.Width=64; hc.Height=8; hc.HaloRadius=2;
+    expect(difference(run(hc,haloProxy,rims,haloProxy),rims)==0,"Disabled halo filter changed output");
+    hc.HaloSuppression=hc.HaloBrightSuppression=1;
+    expect(difference(run(hc,haloProxy,broad,haloProxy),broad)<1e-6f,"Halo filter removed broad shading");
+    expect(difference(run(hc,haloProxy,haloProxy,haloProxy),haloProxy)<1e-6f,"Halo filter changed an unedited image");
+    const auto corrected=run(hc,haloProxy,rims,haloProxy);
+    for (unsigned x : {31u,32u})
+    {
+        expect(corrected.pixels[x].r>rims.pixels[x].r+.001f,"Halo filter did not lift a dark rim");
+        expect(corrected.pixels[x].r<=broad.pixels[x].r+.0001f,"Halo filter overshot broad lighting");
+    }
+    for (size_t i=0; i<rims.pixels.size(); ++i)
+        expect(std::isfinite(corrected.pixels[i].r) && corrected.pixels[i].a==rims.pixels[i].a,
+               "Halo filter lost alpha or produced invalid output");
+    std::printf("PASS: %u resize fixtures; max error %.7f; edge leakage %.7f -> %.7f; halo preservation\n",
+                cases,worst,smoothError,edgeError);
+    expect(DlssNrSpatialTransfer(2)==1 && DlssNrSpatialTransfer(4)==3 && DlssNrSpatialTransfer(0)==0 &&
+           DlssNrSpatialTransfer(5)==5,
            "Transfer routing changed");
     return 0;
 }

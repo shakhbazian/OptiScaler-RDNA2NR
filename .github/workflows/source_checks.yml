@@ -20,6 +20,8 @@ jobs:
         run: |
           g++ -std=c++20 -pthread -Wall -Wextra -Werror tests/rdna2/frame_generation_contracts.cpp -o /tmp/nr-contracts
           /tmp/nr-contracts
+          g++ -std=c++20 -Wall -Wextra -Werror -IOptiScaler tests/rdna2/model_motion_contracts.cpp -o /tmp/nr-motion
+          /tmp/nr-motion
 
   installer-checks:
     runs-on: windows-latest
@@ -42,3 +44,5 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Contract test compilation failed.' }
           & $exe
           if ($LASTEXITCODE -ne 0) { throw 'Contract tests failed.' }
+          python tests/run_ffx_provider_contracts.py
+          if ($LASTEXITCODE -ne 0) { throw 'FFX provider contracts failed.' }

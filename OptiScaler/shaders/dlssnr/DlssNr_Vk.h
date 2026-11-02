@@ -50,7 +50,8 @@ class DlssNr_Vk : public Shader_Vk
 {
     // Worst finished-picture frame: one clean copy before the seam, two captured guides,
     // two colour conversions, then a copy and nine model/composition dispatches (including
-    // exposure and spatial packing). Clamp layers reuse their two immutable slots: 15 total.
+    // exposure and spatial packing), plus optional halo correction. Clamp layers reuse their
+    // two immutable slots: 16 total.
     static constexpr uint32_t kSlotsPerFrame = 16;
     static constexpr uint32_t kFramesInFlight = 4;
     static constexpr uint32_t kSlots = kSlotsPerFrame * kFramesInFlight;
@@ -118,5 +119,7 @@ class DlssNr_Vk : public Shader_Vk
                   VkImageLayout InSourceLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                   VkImageLayout InMotionLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, bool finishedColor = false,
                   // Initialize to UINT32_MAX; identical bindings/constants within one model chain only.
-                  uint32_t* immutableSlot = nullptr);
+                  uint32_t* immutableSlot = nullptr,
+                  // The guide resample (mode 10) reads the game's motion vectors through the model slot.
+                  VkImageLayout InModelLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 };

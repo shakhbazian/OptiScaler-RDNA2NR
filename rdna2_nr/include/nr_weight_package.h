@@ -38,6 +38,7 @@ class WeightPackage {
     const WeightTensor& Tensor(std::uint32_t block, const std::string& role) const;
     const std::uint16_t* HalfData(const WeightTensor& tensor) const;
     const std::uint8_t* Data() const noexcept { return bytes_.data(); }
+    unsigned GraphVersion() const noexcept { return graphVersion_; }
     std::size_t TensorCount() const noexcept { return tensors_.size(); }
     std::size_t ByteLength() const noexcept { return bytes_.size(); }
     const Sha256Digest& PackageHash() const noexcept { return packageHash_; }
@@ -47,6 +48,7 @@ class WeightPackage {
     std::vector<std::uint8_t> bytes_;
     std::vector<WeightTensor> tensors_;
     std::unordered_map<std::string, std::size_t> index_;
+    unsigned graphVersion_=1;
     Sha256Digest packageHash_{};
     Sha256Digest sourceHash_{};
 };

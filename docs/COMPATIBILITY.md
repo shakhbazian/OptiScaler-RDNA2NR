@@ -4,18 +4,18 @@
 
 ## Hardware
 
-The HIP companion contains code for `gfx1030`. RX 6900 XT with 16 GB VRAM is the tested GPU. This is an architecture-specific build, not support for every card sold as RDNA2: `gfx1031` and `gfx1032`, RDNA1, Vega and later architectures are not included in this companion. Other `gfx1030` cards still need hardware qualification.
+The HIP companion targets `gfx1030`. RX 6900 XT with 16 GB VRAM is the tested GPU. Other GPU architectures require a matching backend build.
 
 Auto selection matches HIP to the D3D12 rendering adapter. Having a supported Radeon installed alongside an unsupported rendering GPU is not sufficient. Multi-GPU execution and splitting the network between cards are not implemented.
 
-Ordinary NVIDIA NGX compatibility remains in the frontend. It needs a separately supplied runtime and a driver/GPU combination that accepts it. This project does not remove NVIDIA's original runtime restrictions or claim NVIDIA hardware qualification from the AMD tests.
+The frontend also retains NVIDIA NGX support with a user-supplied runtime compatible with the GPU and driver. See [NVIDIA setup](NVIDIA.md).
 
 ## Rendering paths
 
 | Path | HIP status | Evidence / limitation |
 | --- | --- | --- |
-| D3D12 before or after SR | Implemented | Standalone regressions and user-confirmed operation in Cyberpunk 2077 |
-| D3D11 through a w/Dx12 upscaler | Implemented | Standalone regressions; game use not yet qualified |
+| D3D12 before or after SR | Implemented | Cyberpunk 2077 and The Witcher 3 DX12, plus standalone regressions |
+| D3D11 through a Dx12 bridge upscaler | Implemented | Standalone regressions; game coverage is still limited |
 | Native D3D11-only processing | Unavailable | Select the existing D3D12 upscaler bridge instead |
 | Vulkan NR | Unavailable on HIP | Parent-fork NVIDIA Vulkan work does not provide a HIP path |
 | Multipass, separate-edit, finished-picture and frame-hold paths | Unavailable on HIP | The shared menu limits choices according to backend capabilities |
@@ -36,7 +36,7 @@ Resolution changes can require a new resource/session preparation. During that t
 
 ## Performance
 
-This is a research project. No playable frame-rate target is guaranteed. The original network remains computationally expensive even with the mixed INT8/FP16 executor.
+NR adds substantial GPU work. Model B is the faster option; processing fewer pixels also reduces cost.
 
 Pre-upscale NR usually costs less because it processes the internal render size. Post-upscale NR processes the upscaler output. A game's lower render resolution or a different SR preset can reduce the workload; HIP also supports an independent 25–200% model working scale, with composition at the original frame size. See [settings](SETTINGS.md#model-resolution).
 

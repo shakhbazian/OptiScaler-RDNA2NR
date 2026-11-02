@@ -1,5 +1,6 @@
 param([Parameter(Mandatory=$true)][string]$ModelPath,
       [string]$FrontendPath='',
+      [string]$OutputRoot='',
       [string]$CompanionPath='',
       [ValidateRange(0.25,2.0)][float]$WorkingScale=1.0,
       [ValidateSet('static','pan','pan_reset','occlusion','occlusion_reset','resize')]
@@ -9,7 +10,9 @@ param([Parameter(Mandatory=$true)][string]$ModelPath,
       [switch]$Post)
 $ErrorActionPreference='Stop'
 $root=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-$out=Join-Path $root 'build/tests/rdna2'
+$hostRoot=Join-Path $root 'build/tests/rdna2'
+$out=if($OutputRoot){[IO.Path]::GetFullPath($OutputRoot)}else{$hostRoot}
+New-Item -ItemType Directory -Force -Path $out | Out-Null
 $raw=Join-Path $out 'synthetic_160x90.rgba.f16'
 if(-not(Test-Path -LiteralPath $raw)){throw 'Run-Smoke.ps1 once to create the deterministic input'}
 $stage=Join-Path $out 'dx11-stage'
@@ -19,6 +22,14 @@ $companion=if($CompanionPath){(Resolve-Path -LiteralPath $CompanionPath).Path}el
 Copy-Item -LiteralPath $frontend -Destination $stage -Force
 Copy-Item -LiteralPath $companion -Destination $stage -Force
 $model=(Resolve-Path -LiteralPath $ModelPath).Path
+$inputHeader = [IO.File]::OpenRead($model)
+try { $header = New-Object byte[] 128; if ($inputHeader.Read($header,0,128) -ne 128) { throw 'Model header truncated.' } }
+finally { $inputHeader.Dispose() }
+$graph = [BitConverter]::ToUInt32($header,8)
+if ($graph -notin @(1,2)) { throw 'Unsupported model graph.' }
+$modelSetting = if ($graph -eq 2) { 'ModelBPath' } else { 'ModelPath' }
+$modelChoice = if ($graph -eq 2) { 'b' } else { 'a' }
+
 $stagedModel=Join-Path $stage 'model.nrwgt'
 if(Test-Path -LiteralPath $stagedModel){Remove-Item -LiteralPath $stagedModel -Force}
 try { New-Item -ItemType HardLink -Path $stagedModel -Target $model | Out-Null }
@@ -28,7 +39,7 @@ foreach($enabled in @($false,$true)){
     $label=if($enabled){'nr'}else{'raw'}
     @('[Upscalers]','Dx11Upscaler=fsr22_12','[DLSS]','Enabled=false',
       '[DlssNr]',"Enabled=$($enabled.ToString().ToLowerInvariant())","Backend=$Backend",
-      "ModelPath=$stagedModel","RunBeforeSR=$((!$Post).ToString().ToLowerInvariant())",
+      "${modelSetting}=$stagedModel","HipModel=$modelChoice","RunBeforeSR=$((!$Post).ToString().ToLowerInvariant())",
       'Style=2','LocalTone=1','LocalStructure=1','SkinStructure=-1',
       'AutoMask=false','Intensity=1','TemporalAccumulation=true',('WorkingScale='+$WorkingScale.ToString([Globalization.CultureInfo]::InvariantCulture)),
       'ApplyModel=true','[InitFlags]','AutoExposure=true',
@@ -37,7 +48,7 @@ foreach($enabled in @($false,$true)){
     $results=Join-Path $out "dx11-$Scenario-$($Post.IsPresent)-$label"
     New-Item -ItemType Directory -Force -Path $results | Out-Null
     $start=[Diagnostics.ProcessStartInfo]::new()
-    $start.FileName=Join-Path $out 'optiscaler_dx11_evaluate_host.exe'
+    $start.FileName=Join-Path $hostRoot 'optiscaler_dx11_evaluate_host.exe'
     $start.WorkingDirectory=$root
     $start.UseShellExecute=$false
     $start.CreateNoWindow=$true

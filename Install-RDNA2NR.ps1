@@ -18,11 +18,7 @@ $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($ReleaseRoot)) {
     $ReleaseRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($MyInvocation.MyCommand.Path))
 }
-$SourceHash = 'E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E'
-$PackageHash = 'A7E6EE38172A81E12D613FA9A2F57E32AA1944908E56CD2A33E1F6C94369E3CB'
-$PackageBytes = 291595458
 $Fsr4Int8Hash = 'C7720BC16BEDE334F59A1A32CD22EDBCBBB159685ED5240E61350A5FB0BC8A94'
-$ModelRelative = "1\$SourceHash\mixed-v5-gfx1030.nrwgt"
 $ManifestName = '.optiscaler-rdna2nr-install.json'
 $BackupName = '.optiscaler-rdna2nr-backup'
 $Payload = @(
@@ -118,37 +114,59 @@ function Resolve-ModelRoot([string]$Override) {
     if (-not $env:LOCALAPPDATA) { throw 'LOCALAPPDATA is unavailable.' }
     return (Join-Path $env:LOCALAPPDATA 'OptiScaler-RDNA2NR/models')
 }
-function Prepare-Model([string]$Dll, [string]$Root, [string]$Python, [string]$Models) {
+function Get-ModelCatalog([string]$Root) {
+    $path = Join-Path $Root 'tools/model_converter/model_catalog.json'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Model catalog missing: $path" }
+    $entries = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    foreach ($entry in $entries) { Write-Output $entry }
+}
+function Prepare-Models([string]$Dll, [string]$Root, [string]$Python, [string]$Models) {
     if (-not (Test-Path -LiteralPath $Dll -PathType Leaf)) { throw "Source DLL not found: $Dll" }
-    if ((Get-Hash $Dll) -ne $SourceHash) {
-        throw 'The selected DLL is not the supported original NR version (SHA-256 mismatch).'
-    }
-    $target = Join-Path $Models $ModelRelative
-    if (Test-Path -LiteralPath $target -PathType Leaf) {
-        $existing = Get-Item -LiteralPath $target
-        if ($existing.Length -eq $PackageBytes -and (Get-Hash $target) -eq $PackageHash) {
-            Write-Host "Model already verified: $target"
-            return $target
-        }
-        throw "The model cache contains a different file: $target"
+    $sourceHash = Get-Hash $Dll
+    $profiles = @(Get-ModelCatalog $Root | Where-Object sourceHash -eq $sourceHash)
+    if (-not $profiles.Count) {
+        throw 'Unsupported original NR DLL (SHA-256 mismatch). Supported builds: 310.9.16.0 (recommended) and 310.8.0.0.'
     }
     $converter = Join-Path $Root 'tools/model_converter/write_runtime_package.py'
-    if (-not (Test-Path -LiteralPath $converter -PathType Leaf)) {
-        throw "Converter is missing: $converter"
+    foreach ($profile in $profiles) {
+        $target = Join-Path $Models $profile.relative
+        if (-not (Test-Path -LiteralPath $target -PathType Leaf) -and $profile.legacyRelative) {
+            $legacy = Join-Path $Models $profile.legacyRelative
+            if (Test-Path -LiteralPath $legacy -PathType Leaf) {
+                if ((Get-Item -LiteralPath $legacy).Length -ne $profile.bytes -or
+                    (Get-Hash $legacy) -ne $profile.packageHash) {
+                    throw "The model cache contains a different file: $legacy"
+                }
+                New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+                # Old installations can still refer to this immutable cache entry.
+                # Keep it available while giving new installs the canonical name.
+                try { New-Item -ItemType HardLink -Path $target -Target $legacy -ErrorAction Stop | Out-Null }
+                catch { Copy-Item -LiteralPath $legacy -Destination $target -ErrorAction Stop }
+            }
+        }
+        if (Test-Path -LiteralPath $target -PathType Leaf) {
+            if ((Get-Item -LiteralPath $target).Length -ne $profile.bytes -or (Get-Hash $target) -ne $profile.packageHash) {
+                throw "The model cache contains a different file: $target"
+            }
+            Write-Host "Model already verified: $target"
+        } else {
+            if (-not (Test-Path -LiteralPath $converter -PathType Leaf)) { throw "Converter is missing: $converter" }
+            New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+            $temporary = Join-Path (Split-Path -Parent $target) "nr-$([guid]::NewGuid().ToString('N')).pending"
+            try {
+                & $Python -B $converter --source $Dll --model $profile.model --output $temporary | Out-Host
+                if ($LASTEXITCODE -ne 0) { throw "Model conversion failed (exit $LASTEXITCODE)." }
+                if ((Get-Item -LiteralPath $temporary).Length -ne $profile.bytes -or
+                    (Get-Hash $temporary) -ne $profile.packageHash) { throw 'Converted package verification failed.' }
+                Move-Item -LiteralPath $temporary -Destination $target
+            } finally {
+                if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+            }
+            Write-Host "Model prepared: $target"
+        }
+        [pscustomobject]@{ graph = $profile.graph; sourceHash = $sourceHash;
+            modelPath = $target; modelSha256 = $profile.packageHash; modelBytes = $profile.bytes }
     }
-    New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
-    $temporary = Join-Path (Split-Path -Parent $target) "nr-$([guid]::NewGuid().ToString('N')).pending"
-    try {
-        & $Python $converter --source $Dll --output $temporary | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw "Model conversion failed (exit $LASTEXITCODE)." }
-        if ((Get-Item -LiteralPath $temporary).Length -ne $PackageBytes -or
-            (Get-Hash $temporary) -ne $PackageHash) { throw 'Converted package verification failed.' }
-        Move-Item -LiteralPath $temporary -Destination $target
-    } finally {
-        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
-    }
-    Write-Host "Model prepared: $target"
-    return $target
 }
 function Get-InstallFiles([string]$Root, [string]$Proxy) {
     $result = @([pscustomobject]@{ source = (Join-Path $Root 'OptiScaler.dll'); relative = $Proxy })
@@ -252,7 +270,10 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
         $paths = ($changed | ForEach-Object { Join-Path $gameFull $_.relative }) -join "`n"
         throw "Installed files differ from the previous installation:`n$paths`nUse the GUI to confirm replacement, or pass -ReplaceChangedFiles to retain copies and update."
     }
-    $model = Prepare-Model $Dll $rootFull $Python $Models
+    $prepared = @(Prepare-Models $Dll $rootFull $Python $Models)
+    $modelA = $prepared | Where-Object graph -eq 1
+    $modelB = $prepared | Where-Object graph -eq 2
+    $primary = if ($modelB) { $modelB } else { $modelA }
     $installId = [guid]::NewGuid().ToString('N')
     $backupRoot = Join-Path $gameFull $BackupName
     $transaction = Join-Path $backupRoot "transaction-$installId"
@@ -355,6 +376,11 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
                         @('FSR', 'Fsr4ForceModel', 'auto')
                     )
                 }
+                # Preserve the user's model choice and tuning; update the prepared paths.
+                $settings += ,@('DlssNr', 'ModelPath', $modelA.modelPath)
+                if ($modelB) { $settings += ,@('DlssNr', 'ModelBPath', $modelB.modelPath) }
+                $modelChoice = Get-IniValue $destination 'DlssNr' 'HipModel'
+                if ($modelChoice -notin @('auto','a','b')) { $settings += ,@('DlssNr','HipModel','auto') }
                 Set-IniValues $destination $settings
                 $entry.sha256 = Get-Hash $destination
             }
@@ -363,8 +389,8 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
         }
         $record = [ordered]@{ schemaVersion = 1; product = 'OptiScaler-RDNA2NR';
             releaseVersion = $releaseVersion;
-            installId = $installId; proxyName = $Proxy; modelSha256 = $PackageHash;
-            modelPath = $model; files = $receipt }
+            installId = $installId; proxyName = $Proxy; modelSha256 = $primary.modelSha256;
+            modelPath = $primary.modelPath; models = $prepared; files = $receipt }
         $retainedHistory = @()
         if ($old -and $old.PSObject.Properties['retainedChangedFiles']) {
             $retainedHistory += @($old.retainedChangedFiles)
@@ -390,7 +416,7 @@ function Install-Product([string]$Game, [string]$Dll, [string]$Proxy,
     }
     Write-Output "Installed and verified $($receipt.Count) files in $gameFull"
     if ($releaseVersion) { Write-Output "Release: $releaseVersion" }
-    Write-Output "Proxy: $Proxy; model: $model"
+    Write-Output "Proxy: $Proxy; prepared models: $($prepared.Count)"
     if ($fsr4Path) { Write-Output "FSR 4 INT8 installed: $(Join-Path $gameFull 'OptiScaler/amd_fidelityfx_upscaler_dx12.dll')" }
     if ($retained.Count) { Write-Output "Previous changed files retained in: $changedRoot" }
 }
@@ -404,9 +430,15 @@ function Verify-Product([string]$Game) {
         if (-not (Test-Path -LiteralPath $target -PathType Leaf) -or
             (Get-Hash $target) -ne $item.sha256) { throw "Installed file differs: $target" }
     }
-    if (-not (Test-Path -LiteralPath $record.modelPath -PathType Leaf) -or
-        (Get-Item -LiteralPath $record.modelPath).Length -ne $PackageBytes -or
-        (Get-Hash $record.modelPath) -ne $PackageHash) { throw 'Installed model cache differs.' }
+    $catalog = @(Get-ModelCatalog $ReleaseRoot)
+    # Earlier manifests recorded only A; retain their verification/uninstall flow.
+    $models = if ($record.PSObject.Properties['models']) { @($record.models) } else { @($record) }
+    foreach ($model in $models) {
+        $identity = @($catalog | Where-Object packageHash -eq $model.modelSha256)
+        if ($identity.Count -ne 1 -or -not (Test-Path -LiteralPath $model.modelPath -PathType Leaf) -or
+            (Get-Item -LiteralPath $model.modelPath).Length -ne $identity[0].bytes -or
+            (Get-Hash $model.modelPath) -ne $identity[0].packageHash) { throw 'Installed model cache differs.' }
+    }
     Write-Output "Verified $($record.files.Count) files and model package."
     if ($record.releaseVersion) { Write-Output "Release: $($record.releaseVersion)" }
 }
@@ -444,29 +476,31 @@ function Show-Installer {
     $form.Text = 'OptiScaler-RDNA2NR setup'
     $releaseVersion = Get-ReleaseVersion $ReleaseRoot
     if ($releaseVersion) { $form.Text += " - $releaseVersion" }
-    $form.Size = New-Object System.Drawing.Size(660,420)
+    $form.Size = New-Object System.Drawing.Size(660,440)
     $form.StartPosition = 'CenterScreen'
     $form.MinimumSize = $form.Size
-    $labels = @('Game executable folder', 'Your original nvngx_dlssnr.dll', 'Proxy DLL name')
+    $labels = @('Game executable folder', 'Original nvngx_dlssnr.dll', 'Proxy DLL name')
+    $rowY = @(20,90,180)
     $values = @($GameDirectory, $SourceDll, $ProxyName)
     $boxes = @()
     for ($i = 0; $i -lt 3; $i++) {
         $label = New-Object System.Windows.Forms.Label
-        $label.Text = $labels[$i]; $label.SetBounds(20, (20 + 70*$i), 580, 22)
+        $label.Text = $labels[$i]; $label.SetBounds(20, $rowY[$i], 580, 22)
         $form.Controls.Add($label)
         if ($i -lt 2) {
             $box = New-Object System.Windows.Forms.TextBox
-            $box.SetBounds(20, (43 + 70*$i), 535, 25)
+            $box.SetBounds(20, ($rowY[$i] + 23), 535, 25)
             $box.Text = $values[$i]
             $button = New-Object System.Windows.Forms.Button
-            $button.Text = 'Browse'; $button.SetBounds(565, (42 + 70*$i), 70, 27)
+            $button.Text = 'Browse'; $button.SetBounds(565, ($rowY[$i] + 22), 70, 27)
             $button.Tag = $box
             if ($i -eq 0) {
                 $button.Add_Click({ $dialog = New-Object System.Windows.Forms.FolderBrowserDialog;
                     if ($dialog.ShowDialog() -eq 'OK') { $this.Tag.Text = $dialog.SelectedPath } })
             } else {
                 $button.Add_Click({ $dialog = New-Object System.Windows.Forms.OpenFileDialog;
-                    $dialog.Filter = 'NVIDIA NR DLL|nvngx_dlssnr.dll|DLL files|*.dll';
+                    $dialog.Title = 'Select nvngx_dlssnr.dll - 310.9.16.0 or 310.8.0.0';
+                    $dialog.Filter = 'DLL files (*.dll)|*.dll';
                     if ($dialog.ShowDialog() -eq 'OK') { $this.Tag.Text = $dialog.FileName } })
             }
             $form.Controls.Add($button)
@@ -475,30 +509,34 @@ function Show-Installer {
             $box.DropDownStyle = 'DropDownList'
             [void]$box.Items.AddRange(@('dxgi.dll','winmm.dll','version.dll','dbghelp.dll','d3d12.dll','wininet.dll','winhttp.dll'))
             $box.SelectedItem = $ProxyName
-            $box.SetBounds(20, (43 + 70*$i), 190, 25)
+            $box.SetBounds(20, ($rowY[$i] + 23), 190, 25)
         }
         $form.Controls.Add($box); $boxes += $box
     }
+    $sourceHelp = New-Object System.Windows.Forms.Label
+    $sourceHelp.Text = 'Supported builds: 310.9.16.0 (recommended) or 310.8.0.0.'
+    $sourceHelp.SetBounds(20,145,610,22); $form.Controls.Add($sourceHelp)
     $fsrLabel = New-Object System.Windows.Forms.Label
-    $fsrLabel.Text = 'FSR 4.0.2c INT8 DLL (optional; copied into the game folder)'
-    $fsrLabel.SetBounds(20,230,610,22); $form.Controls.Add($fsrLabel)
+    $fsrLabel.Text = 'FSR 4.0.2c INT8 DLL (optional)'
+    $fsrLabel.SetBounds(20,250,610,22); $form.Controls.Add($fsrLabel)
     $fsrBox = New-Object System.Windows.Forms.TextBox
-    $fsrBox.Text = $Fsr4Int8Dll; $fsrBox.SetBounds(20,253,535,25); $form.Controls.Add($fsrBox)
+    $fsrBox.Text = $Fsr4Int8Dll; $fsrBox.SetBounds(20,273,535,25); $form.Controls.Add($fsrBox)
     $fsrBrowse = New-Object System.Windows.Forms.Button
-    $fsrBrowse.Text = 'Browse'; $fsrBrowse.SetBounds(565,252,70,27); $fsrBrowse.Tag = $fsrBox
+    $fsrBrowse.Text = 'Browse'; $fsrBrowse.SetBounds(565,272,70,27); $fsrBrowse.Tag = $fsrBox
     $fsrBrowse.Add_Click({ $dialog = New-Object System.Windows.Forms.OpenFileDialog;
-        $dialog.Filter = 'FSR 4 INT8 DLL|amd_fidelityfx_upscaler_dx12.dll|DLL files|*.dll';
+        $dialog.Title = 'Select the FSR 4.0.2c INT8 DLL';
+        $dialog.Filter = 'DLL files (*.dll)|*.dll';
         if ($dialog.ShowDialog() -eq 'OK') { $this.Tag.Text = $dialog.FileName } })
     $form.Controls.Add($fsrBrowse)
     $status = New-Object System.Windows.Forms.Label
-    $status.Text = 'The source DLL stays where it is. Conversion runs locally.'
+    $status.Text = 'Ready to install.'
     $status.AutoEllipsis = $true
-    $status.SetBounds(20,304,610,25); $form.Controls.Add($status)
+    $status.SetBounds(20,324,610,25); $form.Controls.Add($status)
     $ui = [pscustomobject]@{ Game = $boxes[0]; Dll = $boxes[1]; Proxy = $boxes[2];
         Status = $status; Form = $form; Payload = $Payload; Python = $PythonPath;
         Models = $ModelRoot; Release = $ReleaseRoot; Fsr4 = $fsrBox }
     $install = New-Object System.Windows.Forms.Button
-    $install.Text = 'Install / update'; $install.SetBounds(20,336,130,30)
+    $install.Text = 'Install / update'; $install.SetBounds(20,356,130,30)
     $install.Tag = $ui
     $install.Add_Click({
         try {
@@ -540,7 +578,7 @@ function Show-Installer {
             Install-Product $game $dll $proxy $context.Release $py (Resolve-ModelRoot $context.Models) $context.Fsr4.Text.Trim() ($changed.Count -gt 0) | Out-Null
             Verify-Product $game | Out-Null
             $context.Status.Text = 'Installation verified.'
-            [System.Windows.Forms.MessageBox]::Show('Installation verified. Enable NR in the OptiScaler menu.','OptiScaler-RDNA2NR') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show('Installation verified. Select the NR model in the OptiScaler menu; Auto is recommended.','OptiScaler-RDNA2NR') | Out-Null
         } catch {
             $this.Tag.Status.Text = $_.Exception.Message
             [System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'OptiScaler-RDNA2NR',0,16) | Out-Null
@@ -548,7 +586,7 @@ function Show-Installer {
     })
     $form.Controls.Add($install)
     $uninstall = New-Object System.Windows.Forms.Button
-    $uninstall.Text = 'Uninstall'; $uninstall.SetBounds(165,336,110,30)
+    $uninstall.Text = 'Uninstall'; $uninstall.SetBounds(165,356,110,30)
     $uninstall.Tag = $ui
     $uninstall.Add_Click({
         $context = $this.Tag

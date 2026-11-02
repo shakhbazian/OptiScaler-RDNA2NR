@@ -27,9 +27,9 @@
 #include <shaders/Shader_Dx12.h>
 #include <shaders/Shader_Dx12Utils.h>
 
-// A maximal spatial frame uses 11 codec dispatches: meter 2, encode 1, pack 2, clamps 2,
-// unpack 1, private enlargement 2 and resolve 1. Twelve queued frames need 132 slots.
-#define DLSSNR_NUM_OF_HEAPS 132
+// A maximal spatial frame uses 12 codec dispatches: meter 2, encode 1, pack 2, clamps 2,
+// halo filter 1, unpack 1, private enlargement 2 and resolve 1. Twelve queued frames need 144 slots.
+#define DLSSNR_NUM_OF_HEAPS 144
 
 class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
 {
@@ -96,8 +96,6 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
     void SetBufferState(ID3D12GraphicsCommandList* cmdList, D3D12_RESOURCE_STATES state);
     ID3D12Resource* Buffer();
     bool CanRender() const;
-    void DiagnosePipeline(unsigned stage, ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params,
-                          ID3D12Resource* color, uint32_t flags, bool rr, bool success = true);
     void BeginInputHold(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
                         const D3D12_RESOURCE_STATES* inputStates);
     void EndInputHold(NVSDK_NGX_Parameter* params);

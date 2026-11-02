@@ -135,11 +135,12 @@ WeightPackage WeightPackage::LoadMemory(std::vector<std::uint8_t> bytes,
     Require(actualPackage == expectedPackage, "Weight package SHA-256 mismatch");
     const auto* header = bytes.data();
     Require(std::memcmp(header, "NRWGT001", 8) == 0, "Unsupported weight package magic");
-    Require(Read<std::uint32_t>(header + 8) == 1 && Read<std::uint32_t>(header + 12) == 1,
+    const auto graphVersion=Read<std::uint32_t>(header + 8);
+    Require((graphVersion==1||graphVersion==2) && Read<std::uint32_t>(header + 12) == 1,
             "Unsupported graph or math contract");
     Require(Read<std::uint64_t>(header + 16) == bytes.size(), "Weight package length mismatch");
     const auto count = Read<std::uint32_t>(header + 24);
-    Require(count == 641 && Read<std::uint32_t>(header + 28) == entrySize,
+    Require(count == (graphVersion==1?641u:273u) && Read<std::uint32_t>(header + 28) == entrySize,
             "Unexpected tensor manifest size");
     Sha256Digest source{}, tableExpected{}, payloadExpected{};
     std::memcpy(source.data(), header + 32, 32);
@@ -159,7 +160,12 @@ WeightPackage WeightPackage::LoadMemory(std::vector<std::uint8_t> bytes,
     Require(IsZero(bytes.data() + headerSize + tableBytes, bytes.data() + payloadStart),
             "Nonzero table alignment padding");
 
+    if(graphVersion==2){
+        Require(FormatSha256(actualPackage)=="2CE6F8BB07F18399A58120F9FB2F1152DD39D6B872370DA7EE61B104E4165AE7", "Unknown model B package");
+        Require(FormatSha256(source)=="2BC19BC09A7B89DD44F73E2AC0108FCC586E2154BDD0830F242F4F040E28789F", "Unknown model B source");
+    }
     WeightPackage package;
+    package.graphVersion_ = graphVersion;
     package.packageHash_ = actualPackage;
     package.sourceHash_ = source;
     package.bytes_ = std::move(bytes);
@@ -175,7 +181,7 @@ WeightPackage WeightPackage::LoadMemory(std::vector<std::uint8_t> bytes,
         const auto rank = Read<std::uint32_t>(entry + 8);
         Require(dtype == 1 && rank >= 1 && rank <= 6 && Read<std::uint32_t>(entry + 12) == 0,
                 "Invalid tensor type, rank, or reserved field");
-        Require(tensor.block <= 70, "Tensor block is outside the graph");
+        Require(tensor.block < (graphVersion==1?71u:31u), "Tensor block is outside the graph");
         std::uint64_t elements = 1;
         for (std::uint32_t dimension = 0; dimension < 6; ++dimension) {
             const auto extent = Read<std::uint32_t>(entry + 16 + dimension * 4);

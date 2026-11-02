@@ -11,7 +11,12 @@
 #include <inputs/FfxApi_Dx12.h>
 #include <inputs/FfxApi_Vk.h>
 
-#include <fsr4/FSR4ModelSelection.h>
+#include <fsr4/FSR4DriverProvider.h>
+#include <fsr4/FSR4Models.h>
+#include <fsr4/FSR4Presets.h>
+#include <upscalers/CustomUpscalers.h>
+#include <condition_variable>
+#include <thread>
 
 #include "ffx_api.h"
 #include <detours/detours.h>
@@ -71,6 +76,17 @@ struct FfxModule
     PfnFfxDispatch Dispatch = nullptr;
 };
 
+// Upscaler dll from custom/<name>/ffx, only used by Opti and never hooked for inputs
+struct CustomFfxModule
+{
+    std::string name;
+    FfxModule module;
+    State::FfxVersionList versions;
+    bool ready = false;
+    bool finished = false;
+    std::thread::id loadingThread;
+};
+
 class FfxApiProxy
 {
   private:
@@ -90,6 +106,29 @@ class FfxApiProxy
 
     inline static ankerl::unordered_dense::map<ffxContext, FFXStructType> contextToType;
 
+    // std::map so the pointers handed out stay valid
+    inline static std::map<std::string, CustomFfxModule> custom_dx12;
+    inline static std::recursive_mutex customMutex;
+    inline static std::condition_variable_any customLoaded;
+    inline static ankerl::unordered_dense::map<ffxContext, FfxModule*> customContexts;
+
+    static FfxModule* CustomContextModule(ffxContext* context)
+    {
+        if (context == nullptr)
+            return nullptr;
+
+        std::scoped_lock lock(customMutex);
+        auto it = customContexts.find(*context);
+        return it != customContexts.end() ? it->second : nullptr;
+    }
+
+    static void LoadSdkLibrary(const std::wstring& name, const std::wstring& optiPath, const std::wstring& overridePath, HMODULE* memoryModule, HMODULE* loadedModule)
+    {
+        Util::LoadProxyLibrary(name, optiPath, overridePath, memoryModule, loadedModule);
+        if (IsCustomUpscalerModule(*memoryModule)) *memoryModule = nullptr;
+        if (IsCustomUpscalerModule(*loadedModule)) *loadedModule = nullptr;
+    }
+
     inline static bool _skipDestroyCalls = false;
 
     static bool IsLoader(const std::wstring& filePath)
@@ -106,6 +145,32 @@ class FfxApiProxy
     static HMODULE Dx12Module_FG() { return fg_dx12.dll; }
     static HMODULE Dx12Module_Denoiser() { return denoiser_dx12.dll; }
     static HMODULE Dx12Module_Radiance() { return radiance_dx12.dll; }
+
+    // FFX modules that Opti creates its upscalers with, custom ones included
+    static bool IsUpscalerModule(HMODULE module)
+    {
+        return module != nullptr &&
+               (module == main_dx12.dll || module == upscaling_dx12.dll || IsCustomUpscalerModule(module));
+    }
+
+    static bool IsCustomUpscalerModule(HMODULE module)
+    {
+        if (module == nullptr)
+            return false;
+
+        std::scoped_lock lock(customMutex);
+        return std::ranges::any_of(custom_dx12,
+                                   [module](const auto& custom) { return custom.second.module.dll == module; });
+    }
+
+    // Module that runs the DX12 upscaler with this version id
+    static HMODULE UpscalerModule(uint64_t versionId)
+    {
+        if (versionId != 0 && versionId == FSR4DriverProvider::VersionId())
+            return FSR4DriverProvider::LoadedModule();
+
+        return upscaling_dx12.dll != nullptr ? upscaling_dx12.dll : main_dx12.dll;
+    }
 
     static std::wstring Dx12Module_Path() { return main_dx12.filePath; }
     static std::wstring Dx12Module_SR_Path() { return upscaling_dx12.filePath; }
@@ -211,7 +276,7 @@ class FfxApiProxy
         spdlog::info("");
 
         // This is module loaded by game, need to hook it to use inputs
-        if (module != nullptr && main_dx12_hooked.dll == nullptr)
+        if (module != nullptr && main_dx12_hooked.dll == nullptr && !IsCustomUpscalerModule(module))
         {
             main_dx12_hooked.dll = module;
         }
@@ -231,12 +296,12 @@ class FfxApiProxy
 
                 if (main_dx12_hooked.dll == nullptr)
                 {
-                    Util::LoadProxyLibrary(dllNames[i], optiPath, overridePath, &main_dx12_hooked.dll, &main_dx12.dll);
+                    LoadSdkLibrary(dllNames[i], optiPath, overridePath, &main_dx12_hooked.dll, &main_dx12.dll);
                 }
                 else
                 {
                     HMODULE memModule = nullptr;
-                    Util::LoadProxyLibrary(dllNames[i], optiPath, overridePath, &memModule, &main_dx12.dll);
+                    LoadSdkLibrary(dllNames[i], optiPath, overridePath, &memModule, &main_dx12.dll);
                 }
 
                 if (main_dx12.dll != nullptr)
@@ -265,7 +330,8 @@ class FfxApiProxy
 
             if (!main_dx12.isLoader)
             {
-                FSR4ModelSelection::Hook(main_dx12.dll, FSR4Source::SDK);
+                FSR4Presets::Hook(main_dx12.dll);
+                FSR4Models::Hook(main_dx12.dll);
             }
         }
 
@@ -368,7 +434,7 @@ class FfxApiProxy
         spdlog::info("");
 
         // This is module loaded by game, need to hook it to use inputs
-        if (module != nullptr && upscaling_dx12_hooked.dll == nullptr)
+        if (module != nullptr && upscaling_dx12_hooked.dll == nullptr && !IsCustomUpscalerModule(module))
         {
             upscaling_dx12_hooked.dll = module;
         }
@@ -388,13 +454,13 @@ class FfxApiProxy
 
                 if (upscaling_dx12_hooked.dll == nullptr)
                 {
-                    Util::LoadProxyLibrary(dllNames[i], optiPath, overridePath, &upscaling_dx12_hooked.dll,
+                    LoadSdkLibrary(dllNames[i], optiPath, overridePath, &upscaling_dx12_hooked.dll,
                                            &upscaling_dx12.dll);
                 }
                 else
                 {
                     HMODULE memModule = nullptr;
-                    Util::LoadProxyLibrary(dllNames[i], optiPath, overridePath, &memModule, &upscaling_dx12.dll);
+                    LoadSdkLibrary(dllNames[i], optiPath, overridePath, &memModule, &upscaling_dx12.dll);
                 }
 
                 if (upscaling_dx12.dll != nullptr)
@@ -412,7 +478,8 @@ class FfxApiProxy
 
         if (upscaling_dx12.dll != nullptr)
         {
-            FSR4ModelSelection::Hook(upscaling_dx12.dll, FSR4Source::SDK);
+            FSR4Presets::Hook(upscaling_dx12.dll);
+            FSR4Models::Hook(upscaling_dx12.dll);
 
             wchar_t modulePath[MAX_PATH];
             DWORD len = GetModuleFileNameW(upscaling_dx12.dll, modulePath, MAX_PATH);
@@ -512,7 +579,7 @@ class FfxApiProxy
         spdlog::info("");
 
         // This is module loaded by game, need to hook it to use inputs
-        if (module != nullptr && fg_dx12_hooked.dll == nullptr)
+        if (module != nullptr && fg_dx12_hooked.dll == nullptr && !IsCustomUpscalerModule(module))
         {
             fg_dx12_hooked.dll = module;
         }
@@ -532,12 +599,12 @@ class FfxApiProxy
 
                 if (fg_dx12_hooked.dll == nullptr)
                 {
-                    Util::LoadProxyLibrary(dllNames[i], optiPath, overridePath, &fg_dx12_hooked.dll, &fg_dx12.dll);
+                    LoadSdkLibrary(dllNames[i], optiPath, overridePath, &fg_dx12_hooked.dll, &fg_dx12.dll);
                 }
                 else
                 {
                     HMODULE memModule = nullptr;
-                    Util::LoadProxyLibrary(dllNames[i], optiPath, overridePath, &memModule, &fg_dx12.dll);
+                    LoadSdkLibrary(dllNames[i], optiPath, overridePath, &memModule, &fg_dx12.dll);
                 }
 
                 if (fg_dx12.dll != nullptr)
@@ -650,7 +717,7 @@ class FfxApiProxy
         spdlog::info("");
 
         // This is module loaded by game, need to hook it to use inputs
-        if (module != nullptr && denoiser_dx12_hooked.dll == nullptr)
+        if (module != nullptr && denoiser_dx12_hooked.dll == nullptr && !IsCustomUpscalerModule(module))
         {
             denoiser_dx12_hooked.dll = module;
         }
@@ -670,13 +737,13 @@ class FfxApiProxy
 
                 if (denoiser_dx12_hooked.dll == nullptr)
                 {
-                    Util::LoadProxyLibrary(dllNames[i], optiPath, overridePath, &denoiser_dx12_hooked.dll,
+                    LoadSdkLibrary(dllNames[i], optiPath, overridePath, &denoiser_dx12_hooked.dll,
                                            &denoiser_dx12.dll);
                 }
                 else
                 {
                     HMODULE memModule = nullptr;
-                    Util::LoadProxyLibrary(dllNames[i], optiPath, overridePath, &memModule, &denoiser_dx12.dll);
+                    LoadSdkLibrary(dllNames[i], optiPath, overridePath, &memModule, &denoiser_dx12.dll);
                 }
 
                 if (denoiser_dx12.dll != nullptr)
@@ -792,7 +859,7 @@ class FfxApiProxy
         spdlog::info("");
 
         // This is module loaded by game, need to hook it to use inputs
-        if (module != nullptr && radiance_dx12_hooked.dll == nullptr)
+        if (module != nullptr && radiance_dx12_hooked.dll == nullptr && !IsCustomUpscalerModule(module))
         {
             radiance_dx12.dll = module;
         }
@@ -812,13 +879,13 @@ class FfxApiProxy
 
                 if (radiance_dx12_hooked.dll == nullptr)
                 {
-                    Util::LoadProxyLibrary(dllNames[i], optiPath, overridePath, &radiance_dx12_hooked.dll,
+                    LoadSdkLibrary(dllNames[i], optiPath, overridePath, &radiance_dx12_hooked.dll,
                                            &radiance_dx12.dll);
                 }
                 else
                 {
                     HMODULE memModule = nullptr;
-                    Util::LoadProxyLibrary(dllNames[i], optiPath, overridePath, &memModule, &radiance_dx12.dll);
+                    LoadSdkLibrary(dllNames[i], optiPath, overridePath, &memModule, &radiance_dx12.dll);
                 }
 
                 if (radiance_dx12.dll != nullptr)
@@ -923,6 +990,79 @@ class FfxApiProxy
             radiance_dx12.dll = nullptr;
 
         return loadResult;
+    }
+
+    // Loading is only tried once per name, nullptr if it failed
+    static CustomFfxModule* LoadCustomUpscalerDx12(const std::string& name)
+    {
+        CustomFfxModule* custom;
+        {
+            std::unique_lock lock(customMutex);
+            auto [it, inserted] = custom_dx12.try_emplace(name);
+            custom = &it->second;
+            if (!inserted)
+            {
+                // Only feature construction waits here. Loader callbacks merely
+                // inspect the registry, so they never wait while holding the loader lock.
+                if (!custom->finished && custom->loadingThread == std::this_thread::get_id()) return nullptr;
+                customLoaded.wait(lock, [custom] { return custom->finished; });
+                return custom->ready ? custom : nullptr;
+            }
+            custom->name = name;
+            custom->loadingThread = std::this_thread::get_id();
+        }
+        const auto complete = [](CustomFfxModule* entry) {
+            { std::scoped_lock lock(customMutex); entry->finished = true; }
+            customLoaded.notify_all();
+        };
+        std::unique_ptr<CustomFfxModule, decltype(complete)> completion(custom, complete);
+        // Loader callbacks can query this registry. Never hold it over DLL
+        // loading or detour installation, including failed loads.
+        auto path = CustomUpscalers::FfxDllPath(name);
+        FfxModule module;
+        module.dll = CustomUpscalers::LoadDll(name, path);
+        if (!module.dll) return nullptr;
+        module.filePath = path.wstring();
+        module.Configure = (PfnFfxConfigure) KernelBaseProxy::GetProcAddress_()(module.dll, "ffxConfigure");
+        module.CreateContext = (PfnFfxCreateContext) KernelBaseProxy::GetProcAddress_()(module.dll, "ffxCreateContext");
+        module.DestroyContext = (PfnFfxDestroyContext) KernelBaseProxy::GetProcAddress_()(module.dll, "ffxDestroyContext");
+        module.Dispatch = (PfnFfxDispatch) KernelBaseProxy::GetProcAddress_()(module.dll, "ffxDispatch");
+        module.Query = (PfnFfxQuery) KernelBaseProxy::GetProcAddress_()(module.dll, "ffxQuery");
+        {
+            std::scoped_lock lock(customMutex);
+            custom->module = module; // Exclude this handle from input discovery before hooking it.
+        }
+        if (!module.CreateContext || !module.DestroyContext || !module.Query || !module.Configure || !module.Dispatch)
+            return nullptr;
+        FSR4Presets::Hook(module.dll);
+        FSR4Models::Hook(module.dll);
+        {
+            std::scoped_lock lock(customMutex);
+            custom->ready = true;
+        }
+        return custom;
+    }
+
+    static CustomFfxModule* FindCustomUpscalerDx12(const std::string& name)
+    {
+        std::scoped_lock lock(customMutex);
+        auto it = custom_dx12.find(name);
+        return it != custom_dx12.end() && it->second.ready ? &it->second : nullptr;
+    }
+
+    // Context made by the given module, later calls with it go to the same module
+    static ffxReturnCode_t D3D12_CreateContext(FfxModule* module, ffxContext* context, ffxCreateContextDescHeader* desc,
+                                               const ffxAllocationCallbacks* memCb)
+    {
+        auto result = module->CreateContext(context, desc, memCb);
+
+        if (result == FFX_API_RETURN_OK)
+        {
+            std::scoped_lock lock(customMutex);
+            customContexts[*context] = module;
+        }
+
+        return result;
     }
 
     static feature_version VersionDx12()
@@ -1183,6 +1323,13 @@ class FfxApiProxy
                                                const ffxAllocationCallbacks* memCb)
     {
         auto type = GetType(desc->type);
+
+        if (auto overrideVersion = FindOverrideVersion(desc);
+            type == FFXStructType::Upscaling && overrideVersion && *overrideVersion == FSR4DriverProvider::VersionId())
+        {
+            return FSR4DriverProvider::CreateContext(context, desc, memCb);
+        }
+
         auto isFg = type == FFXStructType::FG || type == FFXStructType::SwapchainDX12;
 
         ffxReturnCode_t result = FFX_API_RETURN_ERROR;
@@ -1247,6 +1394,21 @@ class FfxApiProxy
 
     static ffxReturnCode_t D3D12_DestroyContext(ffxContext* context, const ffxAllocationCallbacks* memCb)
     {
+        if (FSR4DriverProvider::OwnsContext(context))
+            return FSR4DriverProvider::DestroyContext(context, memCb);
+
+        if (auto custom = CustomContextModule(context))
+        {
+            const auto handle = *context;
+            const auto result = custom->DestroyContext(context, memCb);
+            if (result == FFX_API_RETURN_OK)
+            {
+                std::scoped_lock lock(customMutex);
+                customContexts.erase(handle);
+            }
+            return result;
+        }
+
         ffxReturnCode_t result = FFX_API_RETURN_ERROR;
         auto type = FFXStructType::Unknown;
 
@@ -1348,6 +1510,12 @@ class FfxApiProxy
 
     static ffxReturnCode_t D3D12_Configure(ffxContext* context, const ffxConfigureDescHeader* desc)
     {
+        if (FSR4DriverProvider::OwnsContext(context))
+            return FSR4DriverProvider::Configure(context, desc);
+
+        if (auto custom = CustomContextModule(context))
+            return custom->Configure(context, desc);
+
         auto type = GetType(desc->type);
 
         if (type == FFXStructType::General && contextToType.contains(*context))
@@ -1389,6 +1557,79 @@ class FfxApiProxy
 
     static ffxReturnCode_t D3D12_Query(ffxContext* context, ffxQueryDescHeader* desc)
     {
+        if (FSR4DriverProvider::OwnsContext(context))
+            return FSR4DriverProvider::Query(context, desc);
+
+        if (auto custom = CustomContextModule(context))
+            return custom->Query(context, desc);
+
+        if (desc->type == FFX_API_QUERY_DESC_TYPE_GET_VERSIONS && GetIndirectType(desc) == FFXStructType::Upscaling)
+        {
+            return D3D12_QueryUpscalerVersions(reinterpret_cast<ffxQueryDescGetVersions*>(desc),
+                                               FSR4DriverProvider::Listing::WhenNewestUpscaler);
+        }
+
+        return D3D12_QuerySdk(context, desc);
+    }
+
+    // Versions of the FFX SDK upscalers and the upscaler of the driver
+    static ffxReturnCode_t D3D12_QueryUpscalerVersions(ffxQueryDescGetVersions* desc,
+                                                       FSR4DriverProvider::Listing driverListing)
+    {
+        ffxQueryDescGetVersions sdkQuery = *desc;
+        uint64_t sdkCount = 0;
+        sdkQuery.outputCount = &sdkCount;
+        sdkQuery.versionIds = nullptr;
+        sdkQuery.versionNames = nullptr;
+
+        if (auto result = D3D12_QuerySdk(nullptr, &sdkQuery.header); result != FFX_API_RETURN_OK)
+            return result;
+
+        std::vector<uint64_t> ids(sdkCount);
+        std::vector<const char*> names(sdkCount);
+        sdkQuery.versionIds = ids.data();
+        sdkQuery.versionNames = names.data();
+
+        if (auto result = D3D12_QuerySdk(nullptr, &sdkQuery.header); result != FFX_API_RETURN_OK)
+            return result;
+
+        ids.resize(sdkCount);
+        names.resize(sdkCount);
+
+        FSR4DriverProvider::AddToVersionList(ids, names, driverListing);
+
+        // Same contract as FFX, a non-zero count is the capacity of the arrays
+        auto count = ids.size();
+        if (*desc->outputCount != 0 && (desc->versionIds != nullptr || desc->versionNames != nullptr))
+            count = std::min<size_t>(count, *desc->outputCount);
+
+        for (size_t i = 0; i < count; i++)
+        {
+            if (desc->versionIds != nullptr)
+                desc->versionIds[i] = ids[i];
+
+            if (desc->versionNames != nullptr)
+                desc->versionNames[i] = names[i];
+        }
+
+        *desc->outputCount = count;
+        return FFX_API_RETURN_OK;
+    }
+
+  private:
+    static std::optional<uint64_t> FindOverrideVersion(const ffxApiHeader* desc)
+    {
+        for (auto header = desc; header != nullptr; header = header->pNext)
+        {
+            if (header->type == FFX_API_DESC_TYPE_OVERRIDE_VERSION)
+                return reinterpret_cast<const ffxOverrideVersion*>(header)->versionId;
+        }
+
+        return std::nullopt;
+    }
+
+    static ffxReturnCode_t D3D12_QuerySdk(ffxContext* context, ffxQueryDescHeader* desc)
+    {
         auto type = GetIndirectType(desc);
         auto isFg = type == FFXStructType::FG || type == FFXStructType::SwapchainDX12;
 
@@ -1424,8 +1665,15 @@ class FfxApiProxy
         return FFX_API_RETURN_NO_PROVIDER;
     }
 
+  public:
     static ffxReturnCode_t D3D12_Dispatch(ffxContext* context, const ffxDispatchDescHeader* desc)
     {
+        if (FSR4DriverProvider::OwnsContext(context))
+            return FSR4DriverProvider::Dispatch(context, desc);
+
+        if (auto custom = CustomContextModule(context))
+            return custom->Dispatch(context, desc);
+
         auto type = GetType(desc->type);
         auto isFg = type == FFXStructType::FG || type == FFXStructType::SwapchainDX12;
 

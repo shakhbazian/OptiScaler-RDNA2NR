@@ -11,6 +11,18 @@
 
 using Microsoft::WRL::ComPtr;
 
+// DXVK reports revision 0, then any entry of the device id is used, they share the generation
+static std::optional<device_info::CardInfo> GetAmdCardInfo(const GpuInformation& gpuInfo)
+{
+    if (auto cardInfo = device_info::GetCardInfo({ gpuInfo.vendorId, gpuInfo.deviceId, gpuInfo.revisionId }))
+        return cardInfo;
+
+    return device_info::GetCardInfo({ gpuInfo.vendorId, gpuInfo.deviceId, device_info::kRevisionIdAny });
+}
+
+
+
+
 // Prioritize Nvidia cards that can run DLSS and are connected to a display
 // void sortGpus(std::vector<GpuInformation>& gpus)
 //{
@@ -152,8 +164,7 @@ std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
 
             if (gpuInfo.vendorId == VendorId::AMD)
             {
-                device_info::AdapterId adapterId { gpuInfo.vendorId, gpuInfo.deviceId, gpuInfo.revisionId };
-                auto cardInfo = device_info::GetCardInfo(adapterId);
+                auto cardInfo = GetAmdCardInfo(gpuInfo);
 
                 if (cardInfo.has_value())
                     gpuInfo.amdHwGeneration = cardInfo.value().generation;
@@ -410,7 +421,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
     for (auto& gpuInfo : cache)
     {
         if (gpuInfo.vendorId != VendorId::AMD && !gpuInfo.usesDxvk &&
-            Config::Instance()->Fsr4ForceModel.value_or_default() == FSR4Support::None)
+            Config::Instance()->Fsr4GpuSupport.value_or_default() == FSR4Support::None)
         {
             continue;
         }
@@ -446,9 +457,9 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
                     res.usesVkd3dProton = true;
 
                 // Kinda questionable, may need to reconsider
-                if (Config::Instance()->Fsr4ForceModel.value_or_default() != FSR4Support::None)
+                if (Config::Instance()->Fsr4GpuSupport.value_or_default() != FSR4Support::None)
                 {
-                    res.fsr4Support = Config::Instance()->Fsr4ForceModel.value_or_default();
+                    res.fsr4Support = Config::Instance()->Fsr4GpuSupport.value_or_default();
                     res.fsr4ForcedSupport = true;
                 }
 
@@ -500,6 +511,10 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
 
                         if (moduleAmdxc64 != nullptr)
                         {
+                            // With Fsr4DoNotLoadAmdxc64 the D3D12 driver is what loads amdxc64,
+                            // the load hooks don't see it and leave it unhooked
+                            Amdxc64Hooks::Init();
+
                             AmdExtD3DCreateInterface =
                                 (PFN_AmdExtD3DCreateInterface) KernelBaseProxy::GetProcAddress_()(
                                     moduleAmdxc64, "AmdExtD3DCreateInterface");
@@ -549,8 +564,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
                     // Don't treat this as real because RDNA3 on Linux may be able to support FP8, useful for FG
                     if (res.fsr4Support == FSR4Support::None)
                     {
-                        device_info::AdapterId adapterId(gpuInfo.vendorId, gpuInfo.deviceId, gpuInfo.revisionId);
-                        auto cardInfo = device_info::GetCardInfo(adapterId);
+                        auto cardInfo = GetAmdCardInfo(gpuInfo);
 
                         if (cardInfo.has_value())
                         {
@@ -606,7 +620,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
                 primaryGpu.fsr4Support = FSR4Support::INT8;
                 primaryGpu.fsr4ForcedSupport = true;
 
-                Config::Instance()->Fsr4ForceModel = FSR4Support::INT8;
+                Config::Instance()->Fsr4GpuSupport = FSR4Support::INT8;
             }
         }
     }
@@ -656,7 +670,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
     // This means that the user didn't want to force support but we decided that we want to force it
     // We need spoofing on but if it's off then this will be too late for most cases to enable it
     // But if we only force it for AMD GPUs then that's fine
-    if (Config::Instance()->Fsr4ForceModel.value_or_default() == FSR4Support::None && primaryGpu.fsr4ForcedSupport)
+    if (Config::Instance()->Fsr4GpuSupport.value_or_default() == FSR4Support::None && primaryGpu.fsr4ForcedSupport)
     {
         //// We need spoofing hooks for FFX but want to avoid spoofing for the rest of the game
         // if (!Config::Instance()->DxgiSpoofing.value_or_default())
@@ -669,17 +683,19 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
     }
 }
 
-void IdentifyGpu::updateInt8Support(std::optional<bool>& sdkSupportsInt8, std::optional<bool>& amdxcffx64SupportsInt8)
+void IdentifyGpu::updateInt8Support(bool sdkSupportsInt8, bool driverSupportsInt8)
 {
-    if (amdxcffx64SupportsInt8 && !amdxcffx64SupportsInt8.value() && sdkSupportsInt8 && !sdkSupportsInt8.value())
-    {
-        LOG_DEBUG("Neither driver nor the sdk supports FSR 4 Int 8, disabling");
+    if (sdkSupportsInt8 || driverSupportsInt8)
+        return;
 
-        std::scoped_lock lock(mutex);
-        for (auto& gpuInfo : cache)
-        {
-            gpuInfo.fsr4Support = FSR4Support::None;
-            gpuInfo.fsr4ForcedSupport = false;
-        }
+    std::scoped_lock lock(mutex);
+    for (auto& gpuInfo : cache)
+    {
+        if (gpuInfo.fsr4Support != FSR4Support::INT8)
+            continue;
+
+        LOG_DEBUG("Neither driver nor the sdk supports FSR 4 Int 8, disabling FSR 4 for {}", gpuInfo.name);
+        gpuInfo.fsr4Support = FSR4Support::None;
+        gpuInfo.fsr4ForcedSupport = false;
     }
 }

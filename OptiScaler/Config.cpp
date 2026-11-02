@@ -288,20 +288,29 @@ bool Config::Reload(std::filesystem::path iniPath)
             FsrMinDisOccAcc.set_from_config(readFloat("FSR", "MinDisOccAcc"));
             FsrDebugView.set_from_config(readBool("FSR", "DebugView"));
             FfxUpscalerIndex.set_from_config(readInt("FSR", "UpscalerIndex"));
+            FfxProviderId.set_from_config(readString("FSR", "ProviderId"));
+            CustomUpscaler.set_from_config(readString("Libraries", "CustomFfxUpscaler"));
+            if (CustomUpscaler.has_value()) FfxUpscalerIndexFor(CustomUpscaler.value()).set_from_config(readInt("FSR", "CustomUpscalerIndex"));
+            CSimpleIniA::TNamesDepend customNames;
+            ini.GetAllKeys("CustomFFX", customNames);
+            for (const auto& key : customNames)
+                FfxUpscalerIndexFor(key.pItem).set_from_config(readInt("CustomFFX", key.pItem));
             FfxFGIndex.set_from_config(readInt("FSR", "FGIndex"));
             FsrUseMaskForTransparency.set_from_config(readBool("FSR", "UseReactiveMaskForTransparency"));
             DlssReactiveMaskBias.set_from_config(readFloat("FSR", "DlssReactiveMaskBias"));
 
-            if (auto v = readEnum<FSR4Support>("FSR", "Fsr4ForceModel"))
-                Fsr4ForceModel.set_from_config(*v);
+            if (auto v = readEnum<FSR4Support>("FSR", "Fsr4GpuSupport"))
+                Fsr4GpuSupport.set_from_config(*v);
             else
-                Fsr4ForceModel.reset();
+                Fsr4GpuSupport.reset();
 
             Fsr4EnableWatermark.set_from_config(readBool("FSR", "Fsr4EnableWatermark"));
             Fsr4DoNotLoadAmdxc64.set_from_config(readBool("FSR", "Fsr4DoNotLoadAmdxc64"));
 
             if (auto setting = readInt("FSR", "Fsr4Preset"); setting.has_value() && setting >= 0 && setting <= 5)
                 Fsr4Preset.set_from_config(setting);
+
+            Fsr4Model.set_from_config(readEnum<FSR4Model>("FSR", "Fsr4Model"));
 
             FsrNonLinearColorSpace.set_from_config(readBool("FSR", "FsrNonLinearColorSpace"));
             FsrNonLinearPQ.set_from_config(readBool("FSR", "FsrNonLinearPQ"));
@@ -339,6 +348,10 @@ bool Config::Reload(std::filesystem::path iniPath)
                 nrBackend = 4;
             DlssNrBackend.set_from_config(nrBackend);
             DlssNrModelPath.set_from_config(readString("DlssNr", "ModelPath"));
+            DlssNrModelBPath.set_from_config(readString("DlssNr", "ModelBPath"));
+            auto hipModel=readString("DlssNr", "HipModel");
+            if(hipModel&&*hipModel!="auto"&&*hipModel!="a"&&*hipModel!="b")hipModel="auto";
+            DlssNrHipModel.set_from_config(hipModel);
             DlssNrTemporalAccumulation.set_from_config(readBool("DlssNr", "TemporalAccumulation"));
             auto nrBeforeSr = readBool("DlssNr", "RunBeforeSR");
             if (!nrBeforeSr.has_value())
@@ -384,6 +397,10 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrWhitePointScale.set_from_config(readFloat("DlssNr", "WhitePointScale"));
             DlssNrReplaceDetailStrength.set_from_config(readFloat("DlssNr", "ReplaceDetailStrength"));
             DlssNrResidualConfidenceSensitivity.set_from_config(readFloat("DlssNr", "ResidualConfidenceSensitivity"));
+            DlssNrHistoryRejection.set_from_config(readBool("DlssNr", "HistoryRejection"));
+            DlssNrHaloSuppression.set_from_config(readFloat("DlssNr", "HaloSuppression"));
+            DlssNrHaloBrightSuppression.set_from_config(readFloat("DlssNr", "HaloBrightSuppression"));
+            DlssNrHaloRadius.set_from_config(readFloat("DlssNr", "HaloRadius"));
             DlssNrWhitePointSource.set_from_config(readUInt("DlssNr", "WhitePointSource"));
             DlssNrWhitePointTrim.set_from_config(readFloat("DlssNr", "WhitePointTrim"));
             DlssNrAutoExposureTrim.set_from_config(readFloat("DlssNr", "AutoExposureTrim"));
@@ -406,6 +423,8 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrEnvironmentColour.set_from_config(readFloat("DlssNr", "EnvironmentColour"));
             DlssNrShowSkinMask.set_from_config(readBool("DlssNr", "ShowSkinMask"));
             DlssNrUnlockPasses.set_from_config(readBool("DlssNr", "UnlockPasses"));
+            DlssNrMatchGuides.set_from_config(readBool("DlssNr", "MatchGuides"));
+            DlssNrRenderMotionScale.set_from_config(readBool("DlssNr", "RenderMotionScale"));
             for (unsigned int i = 0; i < std::size(DlssNrPassOverrides); ++i)
             {
                 auto& pass = DlssNrPassOverrides[i];
@@ -895,6 +914,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             FfxDx12RRPath.set_from_config(readWString("Libraries", "FfxDx12RRPath"));
             FfxDx12RCPath.set_from_config(readWString("Libraries", "FfxDx12RCPath"));
             FfxVkPath.set_from_config(readWString("Libraries", "FfxVkPath"));
+            Fsr4DriverPath.set_from_config(readWString("Libraries", "Fsr4DriverPath"));
 
             XeSSLibrary.set_from_config(readWString("Libraries", "XeSSPath"));
             XeSSLibrary.set_from_config(readWString("Libraries", "XeFGPath"));
@@ -905,6 +925,13 @@ bool Config::Reload(std::filesystem::path iniPath)
         // Reading old configs for compatibility reasons
         {
             _DONTUSE_Fsr4ForceEnableInt8.set_from_config(readBool("FSR", "Fsr4ForceEnableInt8"));
+
+            // Named Fsr4ForceModel in older nightlies
+            if (!Fsr4GpuSupport.has_value())
+            {
+                if (auto v = readEnum<FSR4Support>("FSR", "Fsr4ForceModel"))
+                    Fsr4GpuSupport.set_from_config(*v);
+            }
         }
 
         return true;
@@ -1237,14 +1264,20 @@ bool Config::SaveIni(std::filesystem::path destination)
         ini.SetValue("FSR", "AccAddPerFrame", GetFloatValue(Instance()->FsrAccAddPerFrame.value_for_config()).c_str());
         ini.SetValue("FSR", "MinDisOccAcc", GetFloatValue(Instance()->FsrMinDisOccAcc.value_for_config()).c_str());
         ini.SetValue("FSR", "DebugView", GetBoolValue(Instance()->FsrDebugView.value_for_config()).c_str());
+        ini.Delete("FSR", "CustomUpscalerIndex");
+        for (auto& [name, index] : Instance()->customFfxIndices)
+            ini.SetValue("CustomFFX", name.c_str(), GetIntValue(index.value_for_config()).c_str());
+        ini.SetValue("Libraries", "CustomFfxUpscaler", Instance()->CustomUpscaler.value_for_config_or("auto").c_str());
+        ini.SetValue("FSR", "ProviderId", Instance()->FfxProviderId.value_for_config_or("auto").c_str());
         ini.SetValue("FSR", "UpscalerIndex", GetIntValue(Instance()->FfxUpscalerIndex.value_for_config()).c_str());
         ini.SetValue("FSR", "FGIndex", GetIntValue(Instance()->FfxFGIndex.value_for_config()).c_str());
         ini.SetValue("FSR", "UseReactiveMaskForTransparency",
                      GetBoolValue(Instance()->FsrUseMaskForTransparency.value_for_config()).c_str());
         ini.SetValue("FSR", "DlssReactiveMaskBias",
                      GetFloatValue(Instance()->DlssReactiveMaskBias.value_for_config()).c_str());
-        ini.SetValue("FSR", "Fsr4ForceModel", GetIntValue(Instance()->Fsr4ForceModel.value_for_config()).c_str());
+        ini.SetValue("FSR", "Fsr4GpuSupport", GetIntValue(Instance()->Fsr4GpuSupport.value_for_config()).c_str());
         ini.SetValue("FSR", "Fsr4Preset", GetIntValue(Instance()->Fsr4Preset.value_for_config()).c_str());
+        ini.SetValue("FSR", "Fsr4Model", GetIntValue(Instance()->Fsr4Model.value_for_config()).c_str());
         ini.SetValue("FSR", "Fsr4EnableWatermark",
                      GetBoolValue(Instance()->Fsr4EnableWatermark.value_for_config()).c_str());
         ini.SetValue("FSR", "Fsr4DoNotLoadAmdxc64",
@@ -1272,6 +1305,8 @@ bool Config::SaveIni(std::filesystem::path destination)
         ini.SetValue("DlssNr", "Enabled", GetBoolValue(Instance()->DlssNrEnabled.value_for_config()).c_str());
         ini.SetValue("DlssNr", "Backend", GetIntValue(Instance()->DlssNrBackend.value_for_config()).c_str());
         ini.SetValue("DlssNr", "ModelPath", Instance()->DlssNrModelPath.value_for_config_or("").c_str());
+        ini.SetValue("DlssNr", "ModelBPath", Instance()->DlssNrModelBPath.value_for_config_or("").c_str());
+        ini.SetValue("DlssNr", "HipModel", Instance()->DlssNrHipModel.value_for_config_or("auto").c_str());
         ini.SetValue("DlssNr", "TemporalAccumulation",
                      GetBoolValue(Instance()->DlssNrTemporalAccumulation.value_for_config()).c_str());
         ini.SetValue("DlssNr", "FinishedPicture",
@@ -1345,6 +1380,13 @@ bool Config::SaveIni(std::filesystem::path destination)
                      GetFloatValue(Instance()->DlssNrReplaceDetailStrength.value_for_config()).c_str());
         ini.SetValue("DlssNr", "ResidualConfidenceSensitivity",
                      GetFloatValue(Instance()->DlssNrResidualConfidenceSensitivity.value_for_config()).c_str());
+        ini.SetValue("DlssNr", "HistoryRejection",
+                     GetBoolValue(Instance()->DlssNrHistoryRejection.value_for_config()).c_str());
+        ini.SetValue("DlssNr", "HaloSuppression",
+                     GetFloatValue(Instance()->DlssNrHaloSuppression.value_for_config()).c_str());
+        ini.SetValue("DlssNr", "HaloBrightSuppression",
+                     GetFloatValue(Instance()->DlssNrHaloBrightSuppression.value_for_config()).c_str());
+        ini.SetValue("DlssNr", "HaloRadius", GetFloatValue(Instance()->DlssNrHaloRadius.value_for_config()).c_str());
         ini.SetValue("DlssNr", "WhitePointSource",
                      GetIntValue(Instance()->DlssNrWhitePointSource.value_for_config()).c_str());
         ini.SetValue("DlssNr", "WhitePointTrim",
@@ -1378,6 +1420,8 @@ bool Config::SaveIni(std::filesystem::path destination)
                      GetFloatValue(Instance()->DlssNrEnvironmentColour.value_for_config()).c_str());
         ini.SetValue("DlssNr", "ShowSkinMask", GetBoolValue(Instance()->DlssNrShowSkinMask.value_for_config()).c_str());
         ini.SetValue("DlssNr", "UnlockPasses", GetBoolValue(Instance()->DlssNrUnlockPasses.value_for_config()).c_str());
+        ini.SetValue("DlssNr", "MatchGuides", GetBoolValue(Instance()->DlssNrMatchGuides.value_for_config()).c_str());
+        ini.SetValue("DlssNr", "RenderMotionScale", GetBoolValue(Instance()->DlssNrRenderMotionScale.value_for_config()).c_str());
         for (unsigned int i = 0; i < std::size(Instance()->DlssNrPassOverrides); ++i)
         {
             auto& pass = Instance()->DlssNrPassOverrides[i];
@@ -1828,6 +1872,7 @@ bool Config::SaveIni(std::filesystem::path destination)
                      wstring_to_string(Instance()->FfxDx12RRPath.value_for_config_or(L"auto")).c_str());
         ini.SetValue("Libraries", "FfxDx12RCPath",
                      wstring_to_string(Instance()->FfxDx12RCPath.value_for_config_or(L"auto")).c_str());
+        ini.SetValue("Libraries", "Fsr4DriverPath", wstring_to_string(Instance()->Fsr4DriverPath.value_for_config_or(L"auto")).c_str());
         ini.SetValue("Libraries", "FfxVkPath",
                      wstring_to_string(Instance()->FfxVkPath.value_for_config_or(L"auto")).c_str());
 
@@ -1850,6 +1895,7 @@ bool Config::SaveIni(std::filesystem::path destination)
     // Old configs, just delete them
     {
         ini.Delete("FSR", "Fsr4ForceEnableInt8");
+        ini.Delete("FSR", "Fsr4ForceModel");
         ini.Delete("Nukems", "MakeDepthCopy", true);
     }
 

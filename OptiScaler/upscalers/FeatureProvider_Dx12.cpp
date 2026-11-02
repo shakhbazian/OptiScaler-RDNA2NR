@@ -38,7 +38,7 @@ bool FeatureProvider_Dx12::GetFeature(Upscaler upscaler, UINT handleId, NVSDK_NG
         break;
 
     case Upscaler::FFX:
-        *feature = std::make_unique<FFXFeatureDx12>(handleId, parameters);
+        *feature = std::make_unique<FFXFeatureDx12>(handleId, parameters, Config::Instance()->CustomUpscaler.value_or(""));
         break;
 
     case Upscaler::DLSS:

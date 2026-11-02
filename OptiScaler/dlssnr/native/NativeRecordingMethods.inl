@@ -50,10 +50,6 @@
     void OMSetStencilRef(UINT StencilRef) {
         State(24,0,[=](auto* p){p->OMSetStencilRef(StencilRef);});
     }
-    void SetPipelineState(ID3D12PipelineState *pPipelineState) {
-        Keep(pPipelineState);
-        State(25,0,[=](auto* p){p->SetPipelineState(pPipelineState);});
-    }
     void SetComputeRootDescriptorTable(UINT RootParameterIndex,  D3D12_GPU_DESCRIPTOR_HANDLE BaseDescriptor) {
         Root(false,RootParameterIndex,1,[=](auto* p){p->SetComputeRootDescriptorTable(RootParameterIndex, BaseDescriptor);});
     }
@@ -187,20 +183,6 @@
     void SetViewInstanceMask(UINT Mask) {
         State(65,0,[=](auto* p){Extended<ID3D12GraphicsCommandList1>(p,[&](auto* x){x->SetViewInstanceMask(Mask);});});
     }
-    void WriteBufferImmediate(UINT Count,  const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER *pParams,  const D3D12_WRITEBUFFERIMMEDIATE_MODE *pModes) {
-        // This is an ordered GPU write, not persistent command-list state. Keep
-        // both caller-owned arrays until the prefix/suffix list is recorded.
-        // A null pModes means DEFAULT for every write and must stay null.
-        auto params = Copy(pParams, Count);
-        const bool hasModes = pModes != nullptr;
-        auto modes = Copy(pModes, hasModes ? Count : 0);
-        Command([=](auto* p) {
-            Extended<ID3D12GraphicsCommandList2>(p, [&](auto* list) {
-                list->WriteBufferImmediate(Count, params.empty() ? nullptr : params.data(),
-                                           hasModes ? modes.data() : nullptr);
-            });
-        });
-    }
     void SetProtectedResourceSession(ID3D12ProtectedResourceSession *pProtectedResourceSession) {
         (void)pProtectedResourceSession;
         Reject("SetProtectedResourceSession requires qualification");
@@ -277,16 +259,6 @@
         (void)FrontStencilRef;
         (void)BackStencilRef;
         Reject("OMSetFrontAndBackStencilRef requires qualification");
-    }
-    void RSSetDepthBias(FLOAT DepthBias,  FLOAT DepthBiasClamp,  FLOAT SlopeScaledDepthBias) {
-        (void)DepthBias;
-        (void)DepthBiasClamp;
-        (void)SlopeScaledDepthBias;
-        Reject("RSSetDepthBias requires qualification");
-    }
-    void IASetIndexBufferStripCutValue(D3D12_INDEX_BUFFER_STRIP_CUT_VALUE IBStripCutValue) {
-        (void)IBStripCutValue;
-        Reject("IASetIndexBufferStripCutValue requires qualification");
     }
     void SetProgram(const D3D12_SET_PROGRAM_DESC *pDesc) {
         (void)pDesc;

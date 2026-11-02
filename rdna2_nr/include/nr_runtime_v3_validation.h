@@ -1,6 +1,7 @@
 #pragma once
 #include "nr_runtime_v3_contract.h"
 #include "nr_runtime_validation.h"
+#include "nr_model_spec.h"
 #include <limits>
 
 namespace NrV3 {
@@ -38,7 +39,15 @@ inline NrV2::Config AsV2(const Config& c) {
 }
 inline Status Validate(const Config& c) {
     const auto h = Header(c);
-    return h != Status::Ok ? h : Convert(NrV2::Validate(AsV2(c)));
+    if(h!=Status::Ok)return h;
+    if(c.graphVersion==1)return Convert(NrV2::Validate(AsV2(c)));
+    if(c.graphVersion!=2||c.mathContract!=NrV2::MathContract)return Status::Unsupported;
+    if(!NrV2::Nonzero(c.sourceHash)||!NrV2::Nonzero(c.packageHash)||c.reserved[0]||c.reserved[1])return Status::InvalidArgument;
+    if(!NrV2::SupportedLogicalExtent(c.logicalWidth,c.logicalHeight))return Status::Unsupported;
+    try{const auto work=NrModel::WorkingExtent(2,c.logicalWidth,c.logicalHeight);
+        if(c.networkWidth!=work.width||c.networkHeight!=work.height||!NrV2::SupportedGraphExtent(work.width,work.height))return Status::InvalidArgument;
+    }catch(...){return Status::InvalidArgument;}
+    return Status::Ok;
 }
 inline Status Validate(const Input& f, const Config& c, bool scheduledPolicy = false) {
     auto s = Validate(c); if (s != Status::Ok) return s;

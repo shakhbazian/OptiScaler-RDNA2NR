@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <dlssnr/DlssNr_Proxy.h>
 #include <dlssnr/PassProfiles.h>
 #include <dlssnr/DlssNrFeature_Dx12.h>
@@ -89,11 +90,19 @@ struct ModelStateDx12
     ID3D12Resource* depthClone = nullptr;
     ID3D12Resource* motionClone = nullptr;
 
+    // Below-native working size, MatchGuides: depth and motion resampled to the working size so
+    // the model's guides agree with the colour it is given (R32_FLOAT, R32G32_FLOAT).
+    ID3D12Resource* depthSmall = nullptr;
+    ID3D12Resource* motionSmall = nullptr;
+
     unsigned int width = 0;
     unsigned int height = 0;
     bool beforeUpscale = false;
     bool rayReconstruction = false;
     bool reset = true;
+    bool guideContractValid = false;
+    std::array<unsigned,14> guideContract{};
+    std::array<float,2> guideMotionScale{};
 
     // The preset, style and strengths each live feature was created with.
     ModelSettings builtSettings[DlssNr::MaxPassCount] {};

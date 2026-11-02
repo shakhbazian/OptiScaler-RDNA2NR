@@ -259,7 +259,9 @@ class Config
     // Legacy numeric selector while older INI files are migrated to named backends.
     CustomOptional<uint32_t> DlssNrBackend { 4 }; // Auto: gfx1030 HIP or original NVIDIA NGX.
     // User-created NRWGT package. Empty selects the per-user RDNA2-NR model cache.
-    CustomOptional<std::string> DlssNrModelPath { "" };
+    CustomOptional<std::string> DlssNrModelPath { "" }; // Model A; legacy installations keep this path.
+    CustomOptional<std::string> DlssNrModelBPath { "" };
+    CustomOptional<std::string> DlssNrHipModel { "auto" }; // auto prefers B when its package is available.
     CustomOptional<bool> DlssNrTemporalAccumulation { true };
     CustomOptional<bool> DlssNrRunBeforeSr { true };
     CustomOptional<bool> DlssNrFinishedPicture { false };
@@ -291,6 +293,17 @@ class Config
     CustomOptional<float> DlssNrEnvironmentColour { 1.0f };
     CustomOptional<bool> DlssNrShowSkinMask { false };
     CustomOptional<bool> DlssNrUnlockPasses { false };
+    // Below-native WorkingScale: resample depth and motion to the model's working size, so the
+    // guides and the colour it reprojects agree pixel for pixel. Off hands the model full-size
+    // guides for a smaller colour, which is what flickered at every scale below 100%.
+    CustomOptional<bool> DlssNrMatchGuides { true };
+    // The model's motion-vector scale converts the game's units to pixels of the motion texture the
+    // model is handed (the matched working-size resample, or the game's own region), measured
+    // against the size the vectors come in: the render size for low-resolution vectors, the output
+    // size otherwise (the DLSS-enlargement path's formula). Off restores the old conversion,
+    // working size / frame size, which halved every vector below 100% in a game upscaling 2x with
+    // low-resolution vectors.
+    CustomOptional<bool> DlssNrRenderMotionScale { true };
     // Passes 2..30 inherit pass 1, except LocalTone defaults to zero.
     struct NrPassOverrides
     {
@@ -316,7 +329,7 @@ class Config
     // Maximum pixel brightening/darkening ratio.
     CustomOptional<float> DlssNrMaxRatio { 2.0f };
 
-    // Reduced output: 0 classic, 1/2 matched residual spatial/DLSS, 3/4 lighting + colour spatial/DLSS.
+    // Reduced output: 0 classic, 1/2 residual spatial/DLSS, 3/4 lighting + colour, 5 edge-aware.
     CustomOptional<uint32_t> DlssNrTransfer { 1 };
 
     // 0 normal, 1 model input, 2 model answer, 3 amplified edit.
@@ -359,6 +372,10 @@ class Config
     CustomOptional<float> DlssNrWhitePointScale { 1.0f };
     CustomOptional<float> DlssNrReplaceDetailStrength { 0.0f };
     CustomOptional<float> DlssNrResidualConfidenceSensitivity { 0.0f };
+    CustomOptional<bool> DlssNrHistoryRejection { false };
+    CustomOptional<float> DlssNrHaloSuppression { 0.0f };
+    CustomOptional<float> DlssNrHaloBrightSuppression { 0.0f };
+    CustomOptional<float> DlssNrHaloRadius { 2.0f };
     CustomOptional<uint32_t> DlssNrWhitePointSource { 0u };
     CustomOptional<float> DlssNrWhitePointTrim { 1.0f };
     CustomOptional<float> DlssNrAutoExposureTrim { 5.0f };
@@ -560,6 +577,14 @@ class Config
     // FSR
     CustomOptional<bool> FsrDebugView { false };
     // Provider 0 is a real user selection, not an alias for the automatic policy.
+    CustomOptional<std::string, NoDefault> CustomUpscaler;
+    CustomOptional<std::string, NoDefault> FfxProviderId;
+    std::map<std::string, CustomOptional<int, SoftDefault>> customFfxIndices;
+    CustomOptional<int, SoftDefault>& FfxUpscalerIndexFor(const std::string& name)
+    {
+        if (name.empty()) return FfxUpscalerIndex;
+        return customFfxIndices.try_emplace(name, 0).first->second;
+    }
     CustomOptional<int, SoftDefault> FfxUpscalerIndex { 0 };
     CustomOptional<int> FfxFGIndex { 0 };
     CustomOptional<bool> FsrUseMaskForTransparency { true };
@@ -575,9 +600,11 @@ class Config
     CustomOptional<float> FsrAccAddPerFrame { 0.333f };
     CustomOptional<float> FsrMinDisOccAcc { -0.333f };
 
+    CustomOptional<std::wstring, NoDefault> Fsr4DriverPath;
     // FSR4
-    CustomOptional<FSR4Support> Fsr4ForceModel { FSR4Support::None };
+    CustomOptional<FSR4Support> Fsr4GpuSupport { FSR4Support::None };
     CustomOptional<uint32_t, NoDefault> Fsr4Preset;
+    CustomOptional<FSR4Model, NoDefault> Fsr4Model;
     CustomOptional<bool> Fsr4EnableWatermark { false };
     CustomOptional<bool> Fsr4DoNotLoadAmdxc64 { false };
 

@@ -99,10 +99,11 @@ struct CommonColorReference {
         auto b=Barrier(workingProxy.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         list->ResourceBarrier(1,&b);return workingProxy.Get();
     }
-    void Resolve(ID3D12GraphicsCommandList* list,ID3D12Resource* color,bool post,bool hdr,bool apply=true,float strength=1){
+    void Resolve(ID3D12GraphicsCommandList* list,ID3D12Resource* color,bool post,bool hdr,bool apply=true,float strength=1,
+                 const DlssNrConstants* overrideSettings=nullptr){
         auto ready=Barrier(answer.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         list->ResourceBarrier(1,&ready);
-        auto c=Settings(hdr,apply,strength);c.Mode=DlssNrMode_Resolve;
+        auto c=overrideSettings?*overrideSettings:Settings(hdr,apply,strength);c.Mode=DlssNrMode_Resolve;
         Dispatch(list,1,c,workingProxy?workingProxy.Get():proxy.Get(),answer.Get(),original.Get(),composed.Get(),nullptr,exposure);
         auto a=Barrier(composed.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
         auto b=Barrier(color,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);

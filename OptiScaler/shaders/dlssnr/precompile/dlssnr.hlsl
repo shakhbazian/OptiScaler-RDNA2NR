@@ -42,6 +42,8 @@ cbuffer Params : register(b0)
     float gPreExposure, gExposureTrim, gExposureProtection;
     uint gExposureAnchorCount, gExposureSourceWidth, gExposureSourceHeight, gExposurePadding;
     float4 gExposureAnchors[4];
+    float gHaloSuppression, gHaloBrightSuppression, gHaloRadius;
+    uint gHistoryRejectionUnused;
 };
 
 // Hue-preserving gamut compression toward the D65 neutral axis.
@@ -295,6 +297,14 @@ float3 EditAt(float2 uvq)
 
 
 // Soft-knee proxy shared by encoding and matched-residual reconstruction.
+float3 PassthroughProxy(float3 color)
+{
+    // A display-referred flag does not guarantee bounded float storage. Keep
+    // RGB ratios while fitting the neural input; Resolve carries the remainder.
+    color = max(color, 0.0);
+    return color / max(1.0, max(color.r, max(color.g, color.b)));
+}
+
 float3 SoftKnee(float3 display)
 {
     if (gPassthrough != 0)
@@ -441,6 +451,7 @@ float3 CubeScaleResidual(float3 P, float3 T)
 }
 
 #include "dlssnr_resize.hlsli"
+#include "dlssnr_quality.hlsli"
 
 groupshared float4 gExposureReduce[64];
 
@@ -595,6 +606,12 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
     if (id.x >= gWidth || id.y >= gHeight)
         return;
 
+    if (gMode == 13)
+    {
+        gTarget[id.xy] = NrSuppressHalo(int2(id.xy));
+        return;
+    }
+
     // Normalised, so the source may be any size relative to this dispatch.
     float2 uv = (float2(id.xy) + 0.5) / float2(gWidth, gHeight);
 
@@ -724,7 +741,7 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         // damage, so it goes through untouched.
         if (gPassthrough != 0)
         {
-            gTarget[id.xy] = float4(frame, source.a);
+            gTarget[id.xy] = float4(PassthroughProxy(frame), source.a);
             return;
         }
 
@@ -821,6 +838,12 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
     // own hue, which is what makes the failure so confusing to look at.
     const float normScale = gPassthrough != 0 ? 1.0 : WhitePoint();
     float3 original = originalSample.rgb / normScale;
+    float3 passthroughHeadroom = 0.0;
+    if (gPassthrough != 0)
+    {
+        original = PassthroughProxy(originalSample.rgb);
+        passthroughHeadroom = max(originalSample.rgb, 0.0) - original;
+    }
 
     float originalLuma = dot(original, kLuma);
     float proxyLuma = dot(proxy, kLuma);
@@ -849,12 +872,14 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
     uint proxyW, proxyH;
     gSource.GetDimensions(proxyW, proxyH);
     const bool modelRanSmall = proxyW != gWidth || proxyH != gHeight;
-    if ((gTransfer == 3 || gTransfer == 4) && (proxyW < gWidth || proxyH < gHeight))
+    if ((gTransfer == 3 || gTransfer == 4 || gTransfer == 5) &&
+        (proxyW < gWidth || proxyH < gHeight))
     {
-        proxy = gPassthrough != 0 ? saturate(original)
+        proxy = gPassthrough != 0 ? PassthroughProxy(original)
                 : (gReversibleMode == 0 ? saturate(SoftKnee(original))
                    : gReversibleMode >= 3 ? HybridEncode(original) : NeutwoEncode(original));
-        model = NrReconstructModel(proxy, cmpUv, modelSample.rgb);
+        model = gTransfer == 5 ? NrEdgeAwareModel(proxy, cmpUv)
+                               : NrReconstructModel(proxy, cmpUv, modelSample.rgb);
         modelDirect = model;
         proxyLuma = dot(proxy, kLuma);
     }
@@ -865,6 +890,7 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         float3 carrier = clamp(2.0 * SanitizeFinite3(modelSample.rgb, 0.5) - 1.0, -0.999, 0.999);
         edit = (1.0 / 64.0) * carrier / (1.0 - abs(carrier));
     }
+    const bool neutralEdit = all(edit == 0.0);
 
     // Coring was tried here and removed: the per-frame churn's amplitude overlaps the real detail's,
     // so an amplitude threshold cannot separate them -- it only relocated the noise to the threshold.
@@ -887,7 +913,7 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         // Match the encode's curve, passthrough and saturation before cube-scaling the residual.
         // An out-of-range reconstructed proxy would collapse the residual scale to zero.
         float3 fullProxy = gPassthrough != 0
-                               ? saturate(original)
+                               ? PassthroughProxy(original)
                                : (gReversibleMode == 0   ? saturate(SoftKnee(original))
                                   : gReversibleMode >= 3 ? HybridEncode(original)
                                                          : NeutwoEncode(original));
@@ -965,14 +991,20 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         result = gPassthrough != 0 ? modelDirect : HybridDecode(modelDirect);
 
     // Restore native luminance detail with a bounded, positive ratio (including near-black edges).
-    if ((gReversibleMode == 2 || gReversibleMode == 4) && gModelWorkScale > 0.0 &&
-        gModelWorkScale < 0.999 && gReplaceDetailStrength > 0.0)
+    const bool applyReplaceDetail = (gReversibleMode == 2 || gReversibleMode == 4) &&
+        gModelWorkScale > 0.0 && gModelWorkScale < 0.999 && gReplaceDetailStrength > 0.0;
+    if (applyReplaceDetail)
     {
         float2 tap = clamp(round(1.0 / gModelWorkScale), 1.0, 4.0) / float2(gWidth, gHeight);
         float3 neighbours = gOriginal.SampleLevel(gLinear, cmpUv + float2(tap.x, 0), 0).rgb +
                             gOriginal.SampleLevel(gLinear, cmpUv - float2(tap.x, 0), 0).rgb +
                             gOriginal.SampleLevel(gLinear, cmpUv + float2(0, tap.y), 0).rgb +
                             gOriginal.SampleLevel(gLinear, cmpUv - float2(0, tap.y), 0).rgb;
+        if (gPassthrough != 0)
+            neighbours = PassthroughProxy(gOriginal.SampleLevel(gLinear, cmpUv + float2(tap.x, 0), 0).rgb) +
+                         PassthroughProxy(gOriginal.SampleLevel(gLinear, cmpUv - float2(tap.x, 0), 0).rgb) +
+                         PassthroughProxy(gOriginal.SampleLevel(gLinear, cmpUv + float2(0, tap.y), 0).rgb) +
+                         PassthroughProxy(gOriginal.SampleLevel(gLinear, cmpUv - float2(0, tap.y), 0).rgb);
         float blur = dot(original + neighbours / normScale, kLuma) / 5.0;
         float contrast = (originalLuma - blur) / (max(originalLuma, blur) + kRatioFloor);
         result *= exp2(clamp(gReplaceDetailStrength, 0.0, 2.0) * clamp(contrast, -1.0, 1.0));
@@ -980,28 +1012,35 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
 
     // Back out of the normalised space the composition worked in.
     result *= normScale;
-
+    float skinMask = 0.0;
     if (gSkinProtection != 0)
     {
         // Classify the untouched frame, never NR's recoloured output. Controls
         // attenuate the final edit, including replace mode and all model passes.
         float3 displayRgb = gPassthrough != 0 ? original : LinearToSrgb(saturate(original));
         float mask = SkinColourWeight(displayRgb);
+        skinMask = mask;
         float detail = lerp(gEnvironmentDetail, gSkinDetail, mask);
         float colour = lerp(gEnvironmentColour, gSkinColour, mask);
-        float baseY = dot(max(originalSample.rgb, 0.0), kLuma);
+        float3 compositionOriginal = gPassthrough != 0 ? original : originalSample.rgb;
+        float baseY = dot(max(compositionOriginal, 0.0), kLuma);
         float editedY = dot(max(result, 0.0), kLuma);
         float wantedY = lerp(baseY, editedY, detail);
-        float3 baseChroma = originalSample.rgb / max(baseY, 1e-6);
+        float3 baseChroma = compositionOriginal / max(baseY, 1e-6);
         float3 editedChroma = result / max(editedY, 1e-6);
         // Exact endpoints avoid changing the default image or fully protected pixels.
         if (detail == 0.0 && colour == 0.0)
-            result = originalSample.rgb;
+            result = compositionOriginal;
         else if (detail != 1.0 || colour != 1.0)
             result = ClampAp1(lerp(baseChroma, editedChroma, colour) * wantedY);
-        if (gShowSkinMask != 0)
-            result = mask.xxx * normScale;
     }
+    result += passthroughHeadroom;
+    // An empty edit must survive partial skin attenuation and HDR roundtrips,
+    // while explicit sharpening, mask display and comparison still work.
+    if (neutralEdit && !applyReplaceDetail)
+        result = originalSample.rgb;
+    if (gSkinProtection != 0 && gShowSkinMask != 0)
+        result = skinMask.xxx * normScale;
 
     // The side being shown untouched takes the frame as it arrived, past every step above.
     if (showOriginal)

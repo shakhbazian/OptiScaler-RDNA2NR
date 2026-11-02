@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-18T15:17:14.3611087+03:00",
+  "artifactVersion": "r3-0.8.91_fix-1_model-b-test-2",
+  "sourceBaseCommit": "d812ff70a47811d6a6bff817be13f5fb5033fe41",
+  "frontendSha256": "278502518F074BB420B6F01C1258A0AA61EE20DBFD8136AB544C8A2D7359800D",
+  "diagnosticFrontendSha256": "A89834664FAD624D4F520A26553DCC1307A7995C8507C35645863816E46F715C",
+  "hipSha256": "6DF2C10508564C2B6EA7ECE13A7B3FF64E198D588FF3C7C1C366F12F2D44A9A6",
+  "profileId": "0x20261017",
+  "modelBMode": 3,
+  "modelBC32Mask": 32,
+  "productionCases": [
+    "B80 standard pre/post oracle parity, 1280x720 to 2560x1440",
+    "A75 standard pre/post oracle parity, 1280x720 to 2560x1440",
+    "B75 standard pre/post oracle parity, 1280x720 to 2560x1440",
+    "DX11 pre at 80 percent",
+    "DX11 post at 80 percent",
+    "queue switch pre/post oracle parity",
+    "resize pre/post oracle parity",
+    "feature recreation pre/post oracle parity"
+  ],
+  "scaleLifecycle": [
+    {
+      "name": "scale_cycle-mode1",
+      "passed": true,
+      "coverage": "all frames",
+      "returnedOutputBitexact": true
+    },
+    {
+      "name": "scale_stream-mode1",
+      "passed": true,
+      "coverage": "safe bypass during preparation"
+    },
+    {
+      "name": "scale_cycle-mode2",
+      "passed": true,
+      "coverage": "all frames",
+      "returnedOutputBitexact": true
+    },
+    {
+      "name": "scale_stream-mode2",
+      "passed": true,
+      "coverage": "safe bypass during preparation"
+    }
+  ],
+  "modelCycle": {
+    "bFirst": "7626F42ADDC608DA10A42B147E443345EBB0AA1639077BBDF0AF32D148744FAF",
+    "aMiddle": "77335AE69FB3688ECDCEA5C8C2A853899415CF143D6FFE85E4FFE1DF05608B91",
+    "bReturned": "7626F42ADDC608DA10A42B147E443345EBB0AA1639077BBDF0AF32D148744FAF",
+    "returnedBitexact": true,
+    "companionRetained": true
+  },
+  "windowsPowerShell51InstallAndVerify": true,
+  "modelsPrepared": [
+    1,
+    2
+  ],
+  "gameRunValidated": false,
+  "scope": "Source-built hosts after Windows restart; game reproduction requires user check."
+}

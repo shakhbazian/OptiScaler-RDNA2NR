@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <misc/IdentifyGpu.h>
+#include <proxies/FfxApi_Proxy.h>
 
 typedef HRESULT (*PFN_GetDesc)(IDXGIAdapter* This, DXGI_ADAPTER_DESC* pDesc);
 typedef HRESULT (*PFN_GetDesc1)(IDXGIAdapter1* This, DXGI_ADAPTER_DESC1* pDesc);
@@ -175,7 +176,7 @@ HRESULT DxgiSpoofing::hkGetDesc1(IDXGIAdapter1* This, DXGI_ADAPTER_DESC1* pDesc)
 #endif
         }
 
-        if (caller.starts_with("amdxcffx64") || caller.starts_with("amd_fidelityfx_upscaler_dx12"))
+        if (caller.starts_with("amdxcffx64") || caller.starts_with("amd_fidelityfx_upscaler_dx12") || FfxApiProxy::IsCustomUpscalerModule(Util::GetCallerModule(_ReturnAddress())))
         {
             const auto primaryGpu = IdentifyGpu::getPrimaryGpu();
 

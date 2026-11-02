@@ -30,9 +30,8 @@
 #include <hooks/Vulkan_Hooks.h>
 #include <hooks/Gdi32_Hooks.h>
 #include <hooks/Streamline_Hooks.h>
+#include <hooks/Amdxc64_Hooks.h>
 
-#include <fsr4/FSR4ModelSelection.h>
-#include <fsr4/FSR4Upgrade.h>
 #include <misc/IdentifyGpu.h>
 #include <low_latency/input/input_uell.h>
 
@@ -182,6 +181,8 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
     {
         auto dlssModule = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
 
+        std::scoped_lock lock(StreamlineHooks::mutexHookDlss);
+
         if (dlssModule != nullptr)
         {
             StreamlineHooks::hookDlss(dlssModule);
@@ -199,6 +200,9 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
          (normalizedPath.contains(L"\\versions\\") && normalizedPath.contains(L"\\sl_dlss_g_"))))
     {
         auto dlssgModule = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
+
+        std::scoped_lock lock1(StreamlineHooks::mutexHookDlssg);
+        std::scoped_lock lock2(StreamlineHooks::mutexHookLocalDlssg);
 
         if (dlssgModule != nullptr)
         {
@@ -223,6 +227,8 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
     {
         auto reflexModule = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
 
+        std::scoped_lock lock(StreamlineHooks::mutexHookReflex);
+
         if (reflexModule != nullptr && reflexModule != State::Instance().optiSlReflex)
         {
             StreamlineHooks::hookReflex(reflexModule);
@@ -241,6 +247,8 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
     {
         auto pclModule = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
 
+        std::scoped_lock lock(StreamlineHooks::mutexHookPcl);
+
         if (pclModule != nullptr && pclModule != State::Instance().optiSlPCL)
         {
             StreamlineHooks::hookPcl(pclModule);
@@ -258,6 +266,8 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
                          (normalizedPath.contains(L"\\versions\\") && normalizedPath.contains(L"\\sl_common_"))))
     {
         auto commonModule = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
+
+        std::scoped_lock lock(StreamlineHooks::mutexHookCommon);
 
         if (commonModule != nullptr && commonModule != State::Instance().optiSlCommon)
         {
@@ -626,7 +636,6 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
 #ifdef LOG_LIB_OPERATIONS
         LOG_WARN("Call for OptiScaler, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
-        State::Instance().modulesToFree.insert(lpLibrary);
         result = TRUE;
     }
     else if (lpLibrary == FfxApiProxy::Dx12Module())
@@ -634,7 +643,20 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
 #ifdef LOG_LIB_OPERATIONS
         LOG_WARN("Call for FFX Dx12, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
-        State::Instance().modulesToFree.insert(lpLibrary);
+        result = TRUE;
+    }
+    else if (lpLibrary == FfxApiProxy::Dx12Module_SR())
+    {
+#ifdef LOG_LIB_OPERATIONS
+        LOG_WARN("Call for FFX Dx12 SR, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
+#endif
+        result = TRUE;
+    }
+    else if (lpLibrary == FfxApiProxy::Dx12Module_FG())
+    {
+#ifdef LOG_LIB_OPERATIONS
+        LOG_WARN("Call for FFX Dx12 FG, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
+#endif
         result = TRUE;
     }
     else if (lpLibrary == FfxApiProxy::VkModule())
@@ -642,7 +664,6 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
 #ifdef LOG_LIB_OPERATIONS
         LOG_WARN("Call for FFX Vulkan, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
-        State::Instance().modulesToFree.insert(lpLibrary);
         result = TRUE;
     }
     else if (lpLibrary == XeSSProxy::Module())
@@ -650,7 +671,27 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
 #ifdef LOG_LIB_OPERATIONS
         LOG_WARN("Call for XeSS, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
-        State::Instance().modulesToFree.insert(lpLibrary);
+        result = TRUE;
+    }
+    else if (lpLibrary == XeSSProxy::ModuleDx11())
+    {
+#ifdef LOG_LIB_OPERATIONS
+        LOG_WARN("Call for XeSS Dx11, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
+#endif
+        result = TRUE;
+    }
+    else if (lpLibrary == XeLLProxy::Module())
+    {
+#ifdef LOG_LIB_OPERATIONS
+        LOG_WARN("Call for XeLL, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
+#endif
+        result = TRUE;
+    }
+    else if (lpLibrary == XeFGProxy::Module())
+    {
+#ifdef LOG_LIB_OPERATIONS
+        LOG_WARN("Call for XeFG, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
+#endif
         result = TRUE;
     }
     else if (lpLibrary == DxgiProxy::Module())
@@ -658,7 +699,6 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
 #ifdef LOG_LIB_OPERATIONS
         LOG_WARN("Call for DXGI, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
-        State::Instance().modulesToFree.insert(lpLibrary);
         result = TRUE;
     }
     else if (lpLibrary == D3d12Proxy::Module())
@@ -666,7 +706,6 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
 #ifdef LOG_LIB_OPERATIONS
         LOG_WARN("Call for D3D12, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
-        State::Instance().modulesToFree.insert(lpLibrary);
         result = TRUE;
     }
     else if (lpLibrary == Kernel32Proxy::Module())
@@ -674,7 +713,6 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
 #ifdef LOG_LIB_OPERATIONS
         LOG_WARN("Call for Kernel32, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
-        State::Instance().modulesToFree.insert(lpLibrary);
         result = TRUE;
     }
     else if (lpLibrary == KernelBaseProxy::Module())
@@ -682,7 +720,6 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
 #ifdef LOG_LIB_OPERATIONS
         LOG_WARN("Call for KernelBase, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
-        State::Instance().modulesToFree.insert(lpLibrary);
         result = TRUE;
     }
     else if (lpLibrary == NtdllProxy::Module())
@@ -690,7 +727,6 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
 #ifdef LOG_LIB_OPERATIONS
         LOG_WARN("Call for ntdll, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
-        State::Instance().modulesToFree.insert(lpLibrary);
         result = TRUE;
     }
     else if (lpLibrary == vulkanModule)
@@ -698,7 +734,6 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
 #ifdef LOG_LIB_OPERATIONS
         LOG_WARN("Call for Vulkan, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
-        State::Instance().modulesToFree.insert(lpLibrary);
         result = TRUE;
     }
     else if (lpLibrary == d3d11Module)
@@ -706,9 +741,16 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
 #ifdef LOG_LIB_OPERATIONS
         LOG_WARN("Call for D3D11, caller: {}", Util::WhoIsTheCaller(_ReturnAddress()));
 #endif
-        State::Instance().modulesToFree.insert(lpLibrary);
         result = TRUE;
     }
+
+    // FreeLibrary comes from any thread, e.g. GetFileVersionInfo inside parallel FFX context creation
+    if (result.has_value())
+    {
+        std::scoped_lock lock(State::Instance().modulesToFreeMutex);
+        State::Instance().modulesToFree.insert(lpLibrary);
+    }
+
     return result;
 }
 
@@ -958,6 +1000,8 @@ HMODULE LibraryLoadHooks::LoadNvngxDlss(std::wstring originalPath)
 
 void LibraryLoadHooks::CheckModulesInMemory()
 {
+    LOG_FUNC();
+
     if (!StreamlineHooks::isInterposerHooked())
     {
         // hook streamline right away if it's already loaded
@@ -971,14 +1015,19 @@ void LibraryLoadHooks::CheckModulesInMemory()
         }
     }
 
-    if (!StreamlineHooks::isDlssHooked())
+    // try_lock: this runs on every load, including nested ones from threads already inside the loader.
+    // A busy mutex means another thread is hooking that plugin, and the next call catches anything missed.
     {
-        HMODULE slDlss = nullptr;
-        slDlss = GetDllNameWModule(&slDlssNamesW);
-        if (slDlss != nullptr)
+        std::unique_lock lock(StreamlineHooks::mutexHookDlss, std::try_to_lock);
+        if (lock.owns_lock() && !StreamlineHooks::isDlssHooked())
         {
-            LOG_DEBUG("sl.dlss.dll already in memory");
-            StreamlineHooks::hookDlss(slDlss);
+            HMODULE slDlss = nullptr;
+            slDlss = GetDllNameWModule(&slDlssNamesW);
+            if (slDlss != nullptr)
+            {
+                LOG_DEBUG("sl.dlss.dll already in memory");
+                StreamlineHooks::hookDlss(slDlss);
+            }
         }
     }
 
@@ -998,80 +1047,94 @@ void LibraryLoadHooks::CheckModulesInMemory()
     };
 
     // DLSS-G
-    if (!StreamlineHooks::isDlssgHooked() || !StreamlineHooks::isLocalDlssgHooked())
     {
-        HMODULE slDlssg = GetDllNameWModule(&slDlssgNamesW);
-
-        if (slDlssg != nullptr && slDlssg != State::Instance().optiSlDLSSG)
+        std::unique_lock lock1(StreamlineHooks::mutexHookDlssg, std::try_to_lock);
+        std::unique_lock lock2(StreamlineHooks::mutexHookLocalDlssg, std::try_to_lock);
+        if (lock1.owns_lock() && lock2.owns_lock() &&
+            (!StreamlineHooks::isDlssgHooked() || !StreamlineHooks::isLocalDlssgHooked()))
         {
-            const bool localDlssg = isLocalStreamlineModule(slDlssg);
+            HMODULE slDlssg = GetDllNameWModule(&slDlssgNamesW);
 
-            if (localDlssg && State::Instance().activeFgOutput == FGOutput::DLSSG)
+            if (slDlssg != nullptr && slDlssg != State::Instance().optiSlDLSSG)
             {
-                if (!StreamlineHooks::isLocalDlssgHooked())
+                const bool localDlssg = isLocalStreamlineModule(slDlssg);
+
+                if (localDlssg && State::Instance().activeFgOutput == FGOutput::DLSSG)
                 {
-                    LOG_DEBUG("local sl.dlss_g.dll already in memory");
-                    StreamlineHooks::hookLocalDlssg(slDlssg);
+                    if (!StreamlineHooks::isLocalDlssgHooked())
+                    {
+                        LOG_DEBUG("local sl.dlss_g.dll already in memory");
+                        StreamlineHooks::hookLocalDlssg(slDlssg);
+                    }
                 }
-            }
-            else if (!localDlssg && !StreamlineHooks::isDlssgHooked())
-            {
-                LOG_DEBUG("sl.dlss_g.dll already in memory");
-                StreamlineHooks::hookDlssg(slDlssg);
+                else if (!localDlssg && !StreamlineHooks::isDlssgHooked())
+                {
+                    LOG_DEBUG("sl.dlss_g.dll already in memory");
+                    StreamlineHooks::hookDlssg(slDlssg);
+                }
             }
         }
     }
 
     // Reflex
-    if (!StreamlineHooks::isReflexHooked())
     {
-        HMODULE slReflex = GetDllNameWModule(&slReflexNamesW);
-
-        if (slReflex != nullptr && slReflex != State::Instance().optiSlReflex)
+        std::unique_lock lock(StreamlineHooks::mutexHookReflex, std::try_to_lock);
+        if (lock.owns_lock() && !StreamlineHooks::isReflexHooked())
         {
-            const bool localReflex = isLocalStreamlineModule(slReflex);
+            HMODULE slReflex = GetDllNameWModule(&slReflexNamesW);
 
-            if (!localReflex || State::Instance().activeFgOutput != FGOutput::DLSSG)
+            if (slReflex != nullptr && slReflex != State::Instance().optiSlReflex)
             {
-                if (localReflex)
-                    LOG_DEBUG("local sl.reflex.dll already in memory");
-                else
-                    LOG_DEBUG("sl.reflex.dll already in memory");
+                const bool localReflex = isLocalStreamlineModule(slReflex);
 
-                StreamlineHooks::hookReflex(slReflex);
+                if (!localReflex || State::Instance().activeFgOutput != FGOutput::DLSSG)
+                {
+                    if (localReflex)
+                        LOG_DEBUG("local sl.reflex.dll already in memory");
+                    else
+                        LOG_DEBUG("sl.reflex.dll already in memory");
+
+                    StreamlineHooks::hookReflex(slReflex);
+                }
             }
         }
     }
 
     // PCL
-    if (!StreamlineHooks::isPclHooked())
     {
-        HMODULE slPcl = GetDllNameWModule(&slPclNamesW);
-
-        if (slPcl != nullptr && slPcl != State::Instance().optiSlPCL)
+        std::unique_lock lock(StreamlineHooks::mutexHookPcl, std::try_to_lock);
+        if (lock.owns_lock() && !StreamlineHooks::isPclHooked())
         {
-            const bool localPcl = isLocalStreamlineModule(slPcl);
+            HMODULE slPcl = GetDllNameWModule(&slPclNamesW);
 
-            if (!localPcl || State::Instance().activeFgOutput != FGOutput::DLSSG)
+            if (slPcl != nullptr && slPcl != State::Instance().optiSlPCL)
             {
-                if (localPcl)
-                    LOG_DEBUG("local sl.pcl.dll already in memory");
-                else
-                    LOG_DEBUG("sl.pcl.dll already in memory");
+                const bool localPcl = isLocalStreamlineModule(slPcl);
 
-                StreamlineHooks::hookPcl(slPcl);
+                if (!localPcl || State::Instance().activeFgOutput != FGOutput::DLSSG)
+                {
+                    if (localPcl)
+                        LOG_DEBUG("local sl.pcl.dll already in memory");
+                    else
+                        LOG_DEBUG("sl.pcl.dll already in memory");
+
+                    StreamlineHooks::hookPcl(slPcl);
+                }
             }
         }
     }
 
-    if (!StreamlineHooks::isCommonHooked())
     {
-        HMODULE slCommon = nullptr;
-        slCommon = GetDllNameWModule(&slCommonNamesW);
-        if (slCommon != nullptr && slCommon != State::Instance().optiSlCommon)
+        std::unique_lock lock(StreamlineHooks::mutexHookCommon, std::try_to_lock);
+        if (lock.owns_lock() && !StreamlineHooks::isCommonHooked())
         {
-            LOG_DEBUG("sl.common.dll already in memory");
-            StreamlineHooks::hookCommon(slCommon);
+            HMODULE slCommon = nullptr;
+            slCommon = GetDllNameWModule(&slCommonNamesW);
+            if (slCommon != nullptr && slCommon != State::Instance().optiSlCommon)
+            {
+                LOG_DEBUG("sl.common.dll already in memory");
+                StreamlineHooks::hookCommon(slCommon);
+            }
         }
     }
 

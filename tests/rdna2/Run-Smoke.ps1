@@ -1,8 +1,12 @@
 param([Parameter(Mandatory=$true)][string]$ModelPath,
       [string]$CompanionPath='',
       [string]$FrontendPath='',
+      [ValidateSet('fsr22_12','ffx')][string]$Upscaler='fsr22_12',
+      [string]$RuntimeDirectory='',
+      [string]$HostDirectory='',
+      [string]$OutputRoot='',
       [ValidatePattern('^[A-Za-z0-9_-]+$')][string]$Label='candidate',
-      [ValidateSet('standard','notifier','queue_switch','resize','drs','wrapper','early_reset','hdr',
+      [ValidateSet('standard','draw','draw_reuse','draw_reuse_restore','draw_reuse_postcopy','pan_jitter','notifier','queue_switch','resize','drs','wrapper','early_reset','hdr',
                    'exposure','rgba8','rgba32','r11','apply_off','transfer_zero',
                    'recreate','batch','reuse','stream','paced_stream','subrect_bypass',
                    'bundle_bypass','unknown_motion_state','wrapper_bypass','motion32_bypass')]
@@ -17,16 +21,34 @@ param([Parameter(Mandatory=$true)][string]$ModelPath,
 $ErrorActionPreference='Stop'
 $root=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $model=(Resolve-Path -LiteralPath $ModelPath).Path
+$inputHeader = [IO.File]::OpenRead($model)
+try { $header = New-Object byte[] 128; if ($inputHeader.Read($header,0,128) -ne 128) { throw 'Model header truncated.' } }
+finally { $inputHeader.Dispose() }
+$graph = [BitConverter]::ToUInt32($header,8)
+if ($graph -notin @(1,2)) { throw 'Unsupported model graph.' }
+$modelSetting = if ($graph -eq 2) { 'ModelBPath' } else { 'ModelPath' }
+$modelChoice = if ($graph -eq 2) { 'b' } else { 'a' }
+
 $companion=if($CompanionPath){(Resolve-Path -LiteralPath $CompanionPath).Path}
            else{Join-Path $root 'build/hip-gfx1030/dlssnr_hip_scheduled_bridge.dll'}
+if($HostDirectory -and -not $SkipBuild){throw 'Build custom hosts separately and pass -SkipBuild.'}
 if(-not $SkipBuild){
     & (Join-Path $root 'tools/Build-HipBackend.ps1')
     & (Join-Path $root 'tools/Build-OptiScaler.ps1')
     & (Join-Path $root 'tests/rdna2/Build-Hosts.ps1')
 }
-$out=Join-Path $root 'build/tests/rdna2'
+$hostRoot=if($HostDirectory){(Resolve-Path -LiteralPath $HostDirectory).Path}else{Join-Path $root 'build/tests/rdna2'}
+$out=if($OutputRoot){[IO.Path]::GetFullPath($OutputRoot)}else{$hostRoot}
+New-Item -ItemType Directory -Force -Path $out | Out-Null
 $stage=Join-Path $out 'stage'
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
+if($RuntimeDirectory){
+    $runtimeStage=Join-Path $stage 'OptiScaler'
+    New-Item -ItemType Directory -Force -Path $runtimeStage | Out-Null
+    foreach($name in @('amd_fidelityfx_loader_dx12.dll','amd_fidelityfx_upscaler_dx12.dll')){
+        Copy-Item -LiteralPath (Join-Path $RuntimeDirectory $name) -Destination $runtimeStage -Force
+    }
+}
 $inputs=@{
     'OptiScaler.dll'=$(if($FrontendPath){(Resolve-Path -LiteralPath $FrontendPath).Path}else{Join-Path $root 'x64/Release/OptiScaler.dll'})
     'dlssnr_hip_scheduled_bridge.dll'=$companion
@@ -48,9 +70,9 @@ if(-not ('SyntheticFrame' -as [type])){
 }
 [SyntheticFrame]::Write($raw,$Width,$Height)
 function Invoke-Mode([string]$name,[int]$mode,[bool]$before){
-    $config=@('[Upscalers]','Dx12Upscaler=fsr22_12','[DLSS]','Enabled=false',
+    $config=@('[Upscalers]',("Dx12Upscaler=$Upscaler"),'[DLSS]','Enabled=false',
         '[DlssNr]',"Enabled=$((($mode -eq 1) -or ($mode -eq 2)).ToString().ToLowerInvariant())",'Backend=4',
-        ('ModelPath='+(Join-Path $stage 'dlssnr_gfx1030_v1.nrwgt')),
+        ($modelSetting+'='+(Join-Path $stage 'dlssnr_gfx1030_v1.nrwgt')),("HipModel=$modelChoice"),
         "RunBeforeSR=$($before.ToString().ToLowerInvariant())",'Style=2','LocalTone=1',
         'LocalStructure=1','SkinStructure=-1','AutoMask=false','Intensity=1',
         "WhitePointSource=$(if($Scenario -eq 'exposure'){'1'}else{'0'})",
@@ -60,9 +82,12 @@ function Invoke-Mode([string]$name,[int]$mode,[bool]$before){
         '[Hotfix]','ColorResourceBarrier=64','OutputResourceBarrier=8',
         'MotionVectorResourceBarrier=64','ExposureResourceBarrier=64','[ProcessFilter]',
         'ProcessExclusionList=optiscaler_dx12_evaluate_host.exe')
+    if($RuntimeDirectory){
+        $config += @('[Libraries]',"FfxDx12Path=$runtimeStage","FfxDx12SRPath=$runtimeStage")
+    }
     $config | Set-Content -LiteralPath (Join-Path $stage 'OptiScaler.ini') -Encoding utf8
     $start=[Diagnostics.ProcessStartInfo]::new()
-    $start.FileName=Join-Path $out 'optiscaler_dx12_evaluate_host.exe'
+    $start.FileName=Join-Path $hostRoot 'optiscaler_dx12_evaluate_host.exe'
     $start.WorkingDirectory=$root
     $start.UseShellExecute=$false
     $start.CreateNoWindow=$true
@@ -84,6 +109,15 @@ function Invoke-Mode([string]$name,[int]$mode,[bool]$before){
         $log | Set-Content -LiteralPath (Join-Path $out "$Label-$Scenario-${Width}x${Height}-$name.log")
         if($process.ExitCode -ne 0 -or $log -notmatch 'debug_clean=1'){
             throw "$name failed: $log"
+        }
+        if($Upscaler -eq 'ffx' -and $log -notmatch 'FfxApiProxy::InitFfxDx12_SR LoadResult: true'){
+            throw "$name did not load the requested FFX runtime; see its log"
+        }
+        if($Upscaler -eq 'ffx' -and $RuntimeDirectory){
+            $expectedRuntime=Join-Path $runtimeStage 'amd_fidelityfx_upscaler_dx12.dll'
+            if(-not $log.Contains("FfxApiProxy::InitFfxDx12_SR Loaded from $expectedRuntime")){
+                throw "$name loaded a different FFX runtime; see its log"
+            }
         }
         $hash=[regex]::Match($log,'PASS OptiScaler native DX12 Evaluate[^\r\n]*sha256=([0-9A-F]+)')
         if(-not $hash.Success){throw "$name output hash missing"}

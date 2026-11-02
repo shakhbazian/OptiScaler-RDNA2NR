@@ -300,28 +300,15 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
     auto* currentTarget = SetupShaderPipeline(pipeline, paramOutput);
     SetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Output, currentTarget);
     auto* originalColor = GetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Color);
-    const bool diagnoseNr = nrBeforeUpscale && !interop;
-    if (diagnoseNr)
-        NeuralRendering->DiagnosePipeline(0, InCommandList, InParameters, originalColor, GetFeatureFlags(),
-                                          rayReconstruction);
     if (nrBeforeUpscale)
     {
         if (auto* nrInput = PrepareDlssNrInput(*NeuralRendering, Device, InCommandList, InParameters, GetFeatureFlags(),
                                                timingQueue, interop, rayReconstruction, submissionEpoch))
             SetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Color, nrInput);
     }
-    if (diagnoseNr)
-    {
-        auto* edited = GetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Color);
-        NeuralRendering->DiagnosePipeline(1, InCommandList, InParameters, edited, GetFeatureFlags(), rayReconstruction,
-                                          edited != originalColor);
-    }
     UpscalerTime->Start(InCommandList);
     const bool evalResult = EvaluateInternal(InCommandList, InParameters);
     UpscalerTime->End(InCommandList);
-    if (diagnoseNr)
-        NeuralRendering->DiagnosePipeline(2, InCommandList, InParameters, currentTarget, GetFeatureFlags(),
-                                          rayReconstruction, evalResult);
     SetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Color, originalColor);
 
     if (!evalResult)

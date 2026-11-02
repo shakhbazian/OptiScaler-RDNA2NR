@@ -40,7 +40,7 @@ std::string UpscalerDisplayName(Upscaler upscaler, API api)
     bool fsr4Capable = IdentifyGpu::getPrimaryGpu().fsr4Support != FSR4Support::None;
     // An external INT8 runtime can expose FSR 4 on cards outside AMD's native list.
     // This names the available family; the runtime watermark confirms execution.
-    for (const auto* version : State::Instance().ffxUpscalerVersionNames)
+    for (const auto* version : State::Instance().ffxUpscalerVersionsDx12.names)
     {
         if (version != nullptr && std::string_view(version).starts_with("4."))
         {

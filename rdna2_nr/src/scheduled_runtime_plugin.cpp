@@ -6,6 +6,7 @@
 #include "../include/nr_runtime_v3_dx12.h"
 #include "../include/nr_runtime_v3_validation.h"
 #include "../include/nr_pinned_runtime_contract.h"
+#include "../include/nr_runtime_log.h"
 
 namespace {
 using namespace NrV3;
@@ -20,7 +21,8 @@ Status __cdecl Create(ID3D12Device* d,ID3D12CommandQueue* q,void** out){
     if(live)return Status::Busy;HMODULE self=nullptr;
     if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,reinterpret_cast<LPCWSTR>(&Create),&self))return Status::Failed;
     try{live=new Runtime(d,q);selfModule=self;*out=live;return Status::Ok;}
-    catch(...){FreeLibrary(self);return Status::Unsupported;}
+    catch(const std::exception& error){NrRuntimeLog::Write(error.what());FreeLibrary(self);return Status::Unsupported;}
+    catch(...){NrRuntimeLog::Write("unknown runtime creation exception");FreeLibrary(self);return Status::Unsupported;}
 }
 Status __cdecl Configure(void* p,const Config* data,std::uint32_t bytes,const void* pkg,std::uint64_t size){
     if(!p)return Status::InvalidArgument;Config value{};const auto s=Decode(data,bytes,value);
@@ -61,6 +63,10 @@ Status __cdecl Destroy(void** p){if(!p||!*p)return Status::InvalidArgument;auto*
     const auto s=Track(runtime->Destroy());if(s==Status::Ok){delete runtime;*p=nullptr;live=nullptr;
         auto module=selfModule;selfModule=nullptr;if(module)FreeLibrary(module);}return s;}
 } // namespace
+
+// Separate optional export: the existing execution API tables stay compatible.
+extern "C" __declspec(dllexport) void __cdecl
+DlssNrHipBackendSetLogSink(NrRuntimeLog::Sink sink){NrRuntimeLog::sink.store(sink,std::memory_order_release);}
 
 extern "C" __declspec(dllexport) NrV3::Status __cdecl
 DlssNrHipBackendGetScheduledApiV1(std::uint32_t profileId,std::uint32_t requested,

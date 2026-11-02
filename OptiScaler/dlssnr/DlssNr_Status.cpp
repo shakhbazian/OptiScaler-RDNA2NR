@@ -51,12 +51,6 @@ void RetryAfterFailure()
     ++requests.retryGeneration;
 }
 
-void RequestCapture(unsigned int frames)
-{
-    std::lock_guard lock(statusMutex);
-    requests.captureFrames = frames;
-    ++requests.captureGeneration;
-}
 
 std::optional<double> LastGpuTime() { return ReadStatus(Backend::Dx12).gpuTime; }
 } // namespace DlssNr

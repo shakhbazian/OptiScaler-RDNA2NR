@@ -868,18 +868,6 @@ bool FSRFG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQ
             LOG_INFO("Releasing old swapchain");
             ReleaseSwapchain(_hwnd);
 
-            // Not sure why but XeFG sometimes doesn't release the swapchain properly
-            // maybe needed for FSR-FG too, so added it here
-            // so we force release it here to be able to recreate swapchain for same hwnd
-            if (State::Instance().currentRealSwapchain != nullptr)
-            {
-                UINT release = 0;
-                do
-                {
-                    release = State::Instance().currentRealSwapchain->Release();
-                    LOG_DEBUG("Releasing swapchain, ref count: {}", release);
-                } while (release > 0);
-            }
         }
         else
         {
@@ -948,18 +936,6 @@ bool FSRFG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmd
             LOG_INFO("Releasing old swapchain");
             ReleaseSwapchain(_hwnd);
 
-            // Not sure why but XeFG sometimes doesn't release the swapchain properly
-            // maybe needed for FSR-FG too, so added it here
-            // so we force release it here to be able to recreate swapchain for same hwnd
-            if (State::Instance().currentRealSwapchain != nullptr)
-            {
-                UINT release = 0;
-                do
-                {
-                    release = State::Instance().currentRealSwapchain->Release();
-                    LOG_DEBUG("Releasing swapchain, ref count: {}", release);
-                } while (release > 0);
-            }
         }
         else
         {
@@ -1035,6 +1011,8 @@ bool FSRFG_Dx12::ReleaseSwapchain(HWND hwnd)
 
     if (!State::Instance().isShuttingDown)
     {
+        State::Instance().currentFGSwapchain = nullptr;
+
         if (_swapChainContext != nullptr)
         {
             auto result = FfxApiProxy::D3D12_DestroyContext(&_swapChainContext, nullptr);
@@ -1042,7 +1020,6 @@ bool FSRFG_Dx12::ReleaseSwapchain(HWND hwnd)
         }
 
         _swapChainContext = nullptr;
-        State::Instance().currentFGSwapchain = nullptr;
     }
 
     if (Config::Instance()->FGUseMutexForSwapchain.value_or_default())

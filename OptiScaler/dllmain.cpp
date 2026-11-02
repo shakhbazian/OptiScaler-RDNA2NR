@@ -26,7 +26,7 @@
 #include "inputs/FSR3_Dx12.h"
 #include "inputs/FG/FSR3_Dx12_FG.h"
 
-#include <fsr4/FSR4ModelSelection.h>
+#include <hooks/Amdxc64_Hooks.h>
 #include <fsr4/WatermarkEnvironment.h>
 
 #include <hooks/Dxgi_Hooks.h>
@@ -1757,7 +1757,7 @@ DWORD WINAPI getGpuInfo(LPVOID hModuleVoid)
     if (primaryGpu.vendorId == VendorId::AMD)
         Amdxc64Hooks::Init();
 
-    else if (Config::Instance()->Fsr4ForceModel.value_or_default() == FSR4Support::INT8)
+    else if (Config::Instance()->Fsr4GpuSupport.value_or_default() == FSR4Support::INT8)
     {
         // We need spoofing hooks for FFX but want to avoid spoofing for the rest of the game
         if (!Config::Instance()->DxgiSpoofing.value_or_default())
@@ -2213,9 +2213,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 NtdllProxy::FreeLibrary_Ldr(_asiHandles[i]);
         }
 
-        for (const PVOID& v : State::Instance().modulesToFree)
         {
-            NtdllProxy::FreeLibrary_Ldr(v);
+            std::set<PVOID> modulesToFree;
+            {
+                std::lock_guard lock(State::Instance().modulesToFreeMutex);
+                modulesToFree.swap(State::Instance().modulesToFree);
+            }
+            // Unloading can re-enter the loader hooks; release outside their registry lock.
+            for (const PVOID& v : modulesToFree)
+                NtdllProxy::FreeLibrary_Ldr(v);
         }
 
         spdlog::info("");

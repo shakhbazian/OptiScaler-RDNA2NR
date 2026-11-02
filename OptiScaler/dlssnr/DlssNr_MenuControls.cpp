@@ -188,18 +188,19 @@ void RenderInput(Config* config)
         ImGui::BeginDisabled(!reduced);
 
         static const char* enlargeNames[] = { "Classic", "Matched residual", "Matched residual + DLSS",
-                                              "Lighting + colour", "Lighting + colour + DLSS" };
+                                              "Lighting + colour", "Lighting + colour + DLSS", "Edge-aware" };
         if (HipMode(config))
         {
-            static const char* hipNames[] = { "Classic", "Matched residual", "Lighting + colour" };
+            static const char* hipNames[] = { "Classic", "Matched residual", "Lighting + colour", "Edge-aware" };
+            static constexpr uint32_t hipTransfers[] = {0, 1, 3, 5};
             const auto transfer = config->DlssNrTransfer.value_or_default();
-            int enlarge = transfer >= 3 ? 2 : transfer != 0 ? 1 : 0;
+            int enlarge = transfer == 5 ? 3 : transfer >= 3 ? 2 : transfer >= 1 ? 1 : 0;
             if (ImGui::Combo("Enlargement", &enlarge, hipNames, IM_ARRAYSIZE(hipNames)))
-                config->DlssNrTransfer = enlarge == 2 ? 3u : static_cast<uint32_t>(enlarge);
+                config->DlssNrTransfer = hipTransfers[enlarge];
         }
         else
         {
-            int enlarge = (int) std::min(config->DlssNrTransfer.value_or_default(), 4u);
+            int enlarge = (int) std::min(config->DlssNrTransfer.value_or_default(), 5u);
             if (ImGui::Combo("Enlargement", &enlarge, enlargeNames, IM_ARRAYSIZE(enlargeNames)))
                 config->DlssNrTransfer = (uint32_t) enlarge;
         }
@@ -208,6 +209,7 @@ void RenderInput(Config* config)
 
         HelpMarker("Below 100%: Lighting + colour resizes lighting gain and colour changes separately, then applies "
                    "them at full resolution. This can reduce resize halos; fully black pixels remain black. "
+                   "Edge-aware uses the original picture's brightness to keep edits on the correct side of edges. "
                    "DLSS modes require post-upscale DX12 processing.");
     }
     static const char* reversibleNames[] = { "Off (soft knee)", "Neutwo proxy + composed", "Neutwo proxy + replace",
@@ -248,7 +250,7 @@ void RenderInput(Config* config)
     HelpMarker("Higher values darken the NR input; lower values brighten it.");
 }
 
-// Model tuning rebuilds the feature; commit slider changes only on release.
+// Commit tuning on release; the NVIDIA backend may recreate its feature.
 template <typename Option>
 static void DeferredSlider(const char* label, Option* opt, float mn, float mx, float def, bool inheritReset = false)
 {
@@ -289,49 +291,81 @@ static void DeferredSlider(const char* label, Option* opt, float mn, float mx, f
         HelpMarker("Skin detail. -1 follows Local structure.");
 }
 
-void RenderModel(Config* config)
+template <typename Option> static void NrModelCombo(Option* opt, bool allowInherit)
 {
-    const bool hip = HipMode(config);
-    bool unlockPasses = config->DlssNrUnlockPasses.value_or_default();
-    const int menuPassLimit = unlockPasses ? 10 : 2;
-    static int passes = 1;
-    static bool editingPasses = false;
-    if (!editingPasses)
-        passes = (int) std::clamp(config->DlssNrPasses.value_or_default(), 1u, (unsigned) menuPassLimit);
-    ImGui::BeginDisabled(hip);
-    ImGui::SliderInt("Model passes", &passes, 1, menuPassLimit, "%d", ImGuiSliderFlags_AlwaysClamp);
-    editingPasses = ImGui::IsItemActive();
-    if (ImGui::IsItemDeactivatedAfterEdit())
-        config->DlssNrPasses = (uint32_t) std::clamp(passes, 1, menuPassLimit);
-    if (ImGui::Checkbox("Unlock up to 10 passes", &unlockPasses))
-    {
-        config->DlssNrUnlockPasses = unlockPasses;
-        config->DlssNrPasses = std::clamp(config->DlssNrPasses.value_or_default(), 1u, unlockPasses ? 10u : 2u);
-    }
-    ImGui::EndDisabled();
-    if (hip)
-    {
-        if (config->DlssNrPasses.value_or_default() != 1 && ImGui::SmallButton("Use one HIP pass"))
-            config->DlssNrPasses = 1u;
-        ImGui::TextDisabled("The gfx1030 HIP path currently runs one model pass.");
-    }
+    static const char* names[] = { "Automatic", "Original", "Optimized" };
+    const bool inherited = allowInherit && !opt->has_value();
+    const uint32_t preset = opt->has_value() ? opt->value() : 0u;
+    const char* preview = inherited                      ? "Inherit pass 1"
+                          : preset < IM_ARRAYSIZE(names) ? names[preset]
+                                                         : "Unavailable preset";
 
-    static unsigned selectedPass = 0;
-    const auto selectedLabel = std::format("Pass {}", selectedPass + 1);
-    if (ImGui::BeginCombo("Edit pass", selectedLabel.c_str()))
+    if (ImGui::BeginCombo("NR model", preview))
     {
-        for (unsigned pass = 0; pass <= std::size(config->DlssNrPassOverrides); ++pass)
+        if (allowInherit && ImGui::Selectable("Inherit pass 1", inherited))
+            *opt = std::optional<uint32_t> {};
+        for (uint32_t value = 0; value < IM_ARRAYSIZE(names); ++value)
         {
-            const auto label = std::format("Pass {}", pass + 1);
-            if (ImGui::Selectable(label.c_str(), selectedPass == pass))
-                selectedPass = pass;
-            if (selectedPass == pass)
+            const bool selected = !inherited && preset == value;
+            if (ImGui::Selectable(names[value], selected))
+                *opt = value;
+            if (selected)
                 ImGui::SetItemDefaultFocus();
         }
         ImGui::EndCombo();
     }
-    if (selectedPass >= config->DlssNrPasses.value_or_default())
-        ImGui::TextDisabled("Inactive pass. Settings apply when this pass is enabled.");
+    HelpMarker("Automatic: use the installed NR runtime's default model.\n"
+               "Original: use the original model (preset 1).\n"
+               "Optimized: use the smaller FP8 model (preset 2), included in NR 310.9.16.0.\n"
+               "Older runtimes fall back to their default when a model is unavailable.\n"
+               "Changing the model rebuilds this pass and resets its history.");
+}
+
+void RenderModel(Config* config)
+{
+    const bool hip = HipMode(config);
+    static unsigned selectedPass = 0;
+    if (!hip)
+    {
+        bool unlockPasses = config->DlssNrUnlockPasses.value_or_default();
+        const int menuPassLimit = unlockPasses ? 10 : 2;
+        static int passes = 1;
+        static bool editingPasses = false;
+        if (!editingPasses)
+            passes = (int) std::clamp(config->DlssNrPasses.value_or_default(), 1u, (unsigned) menuPassLimit);
+        ImGui::SliderInt("Model passes", &passes, 1, menuPassLimit, "%d", ImGuiSliderFlags_AlwaysClamp);
+        editingPasses = ImGui::IsItemActive();
+        if (ImGui::IsItemDeactivatedAfterEdit())
+            config->DlssNrPasses = (uint32_t) std::clamp(passes, 1, menuPassLimit);
+        if (ImGui::Checkbox("Unlock up to 10 passes", &unlockPasses))
+        {
+            config->DlssNrUnlockPasses = unlockPasses;
+            config->DlssNrPasses = std::clamp(config->DlssNrPasses.value_or_default(), 1u, unlockPasses ? 10u : 2u);
+        }
+
+        const auto selectedLabel = std::format("Pass {}", selectedPass + 1);
+        if (ImGui::BeginCombo("Edit pass", selectedLabel.c_str()))
+        {
+            for (unsigned pass = 0; pass <= std::size(config->DlssNrPassOverrides); ++pass)
+            {
+                const auto label = std::format("Pass {}", pass + 1);
+                if (ImGui::Selectable(label.c_str(), selectedPass == pass))
+                    selectedPass = pass;
+                if (selectedPass == pass)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        if (selectedPass >= config->DlssNrPasses.value_or_default())
+            ImGui::TextDisabled("Inactive pass. Settings apply when this pass is enabled.");
+    }
+    else
+    {
+        // HIP evaluates one pass. Never direct its controls to an unused override.
+        selectedPass = 0;
+        if (config->DlssNrPasses.value_or_default() != 1 && ImGui::SmallButton("Use one pass"))
+            config->DlssNrPasses = 1u;
+    }
 
     // Distinct widget IDs keep uncommitted slider edits with their selected pass.
     ImGui::PushID((int) selectedPass);
@@ -360,6 +394,7 @@ void RenderModel(Config* config)
     static const char* inheritedStyles[] = { "Auto", "Standard", "Natural", "Cinematic" };
     if (selectedPass == 0)
     {
+        if (!HipMode(config)) NrModelCombo(&config->DlssNrPreset, false);
         int style = (int) std::min(config->DlssNrStyle.value_or_default(), 2u);
         if (ImGui::Combo("Style", &style, styles, IM_ARRAYSIZE(styles)))
             config->DlssNrStyle = (uint32_t) style;
@@ -369,18 +404,38 @@ void RenderModel(Config* config)
     else
     {
         auto& pass = config->DlssNrPassOverrides[selectedPass - 1];
+        if (!HipMode(config))
+        {
+            if (selectedPass <= 2) NrModelCombo(&pass.preset, true);
+            else ImGui::TextDisabled("NR model: inherits pass 1");
+        }
         int style = pass.style.has_value() ? std::clamp((int) pass.style.value(), 0, 2) + 1 : 0;
         if (ImGui::Combo("Style", &style, inheritedStyles, IM_ARRAYSIZE(inheritedStyles)))
             pass.style = style ? std::optional<uint32_t>(style - 1) : std::nullopt;
         tuning(pass.intensity, pass.structure, pass.tone, pass.skin, pass.autoMask);
     }
     ImGui::PopID();
+    ImGui::TextDisabled("Slider changes apply on release.");
 }
 
 void RenderBlend(Config* config)
 {
-    if (config->DlssNrResidualAcrossRr.value_or_default())
+    if (!HipMode(config) && config->DlssNrResidualAcrossRr.value_or_default())
+    {
+        Checkbox("Reject stale history", config->DlssNrHistoryRejection);
+        HelpMarker("RR residual path: reject old edits when the input changes and limit them to nearby current edits. "
+                   "Can reduce trails. Off keeps the original history filter.");
         Slider("History confidence threshold", config->DlssNrResidualConfidenceSensitivity, 0.0f, 2.0f, "%.3f", 0.0f);
+    }
+    if (ImGui::TreeNode("Halo suppression (experimental)"))
+    {
+        Slider("Dark rims near bright objects", config->DlssNrHaloSuppression, 0.0f, 1.0f, "%.2f", 0.0f);
+        Slider("Dark rims near dark objects", config->DlssNrHaloBrightSuppression, 0.0f, 1.0f, "%.2f", 0.0f);
+        Slider("Halo radius (NR pixels)", config->DlssNrHaloRadius, 1.0f, 4.0f, "%.0f", 2.0f);
+        HelpMarker("Lifts fine dark rims while keeping broad lighting. Both strengths at zero disable the pass. "
+                   "May lighten real shadows; compare the result before keeping it on.");
+        ImGui::TreePop();
+    }
     if (config->DlssNrFinishedPicture.value_or_default() &&
         (config->DlssNrRunBeforeSr.value_or_default() || config->DlssNrDeferredDlss.value_or_default()))
     {

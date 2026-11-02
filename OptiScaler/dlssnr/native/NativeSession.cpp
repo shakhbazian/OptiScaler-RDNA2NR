@@ -3,6 +3,8 @@
 #include "NativeAdapter.h"
 #include <dlssnr/DlssNr_Status.h>
 #include "../../../rdna2_nr/include/nr_execution_profile.h"
+#include "../../../rdna2_nr/include/nr_model_catalog.h"
+#include "../../../rdna2_nr/include/nr_model_spec.h"
 #include "../../../rdna2_nr/include/nr_runtime_v3_validation.h"
 #include <array>
 #include <chrono>
@@ -15,27 +17,8 @@ namespace DlssNr::Native {
 namespace {
 using NrV3::Status;
 using CpuClock=std::chrono::steady_clock;
-// This first HIP profile accepts one frozen package; its digest is checked by the companion.
-constexpr std::streamoff AcceptedModelBytes=291595458;
-bool CpuTraceEnabled(){static const bool on=GetEnvironmentVariableW(L"NR_NATIVE_CPU_TRACE",nullptr,0)>0;return on;}
-struct CpuTraceTotals {
-    std::atomic<std::uint64_t> count{0};
-    std::array<std::atomic<std::uint64_t>,9> us{};
-    CpuTraceTotals(){for(auto& value:us)value.store(0);}
-    void Add(const std::array<CpuClock::time_point,10>& t){
-        for(unsigned i=0;i<9;++i)us[i].fetch_add(static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(t[i+1]-t[i]).count()),std::memory_order_relaxed);
-        count.fetch_add(1,std::memory_order_relaxed);
-    }
-    void Report(){
-        const auto n=count.exchange(0);if(!n)return;
-        std::array<std::uint64_t,9> values{};
-        for(unsigned i=0;i<9;++i)values[i]=us[i].exchange(0);
-        LOG_INFO("NativeCPU submit n={} select={} prepare={} input={} output={} prefix={} notify={} enqueue={} arm={} suffix={} us",
-            n,values[0],values[1],values[2],values[3],values[4],values[5],values[6],values[7],values[8]);
-    }
-};
-CpuTraceTotals& TraceTotals(){static auto* totals=new CpuTraceTotals;return *totals;}
+void __cdecl RuntimeLog(const char* text){if(text)LOG_INFO("Native NR HIP: {}",text);}
+// The catalog pins each source/graph pair; the companion checks the full digest.
 NrV3::TokenRequest Request(const NrV3::Token& token){return {{sizeof(NrV3::TokenRequest),NrV3::Version},token};}
 NrV2::Hash256 Hash(const char* hex){NrV2::Hash256 result{};for(unsigned i=0;i<32;++i){unsigned value=0;
     for(unsigned j=0;j<2;++j){const char c=hex[i*2+j];value=value*16+unsigned(c<='9'?c-'0':c-'A'+10);}
@@ -47,8 +30,8 @@ void Transition(ID3D12GraphicsCommandList* list,ID3D12Resource* resource,D3D12_R
 }
 struct Shape {
     ComPtr<ID3D12Device> device;ComPtr<ID3D12CommandQueue> queue;
-    unsigned width=0,height=0;std::uint64_t feature=0;bool before=false;
-    bool Same(const Shape& b)const{return device==b.device&&queue==b.queue&&width==b.width&&height==b.height&&feature==b.feature&&before==b.before;}
+    unsigned width=0,height=0;std::uint64_t feature=0;bool before=false;std::uint64_t modelRevision=0;unsigned modelGraph=1;
+    bool Same(const Shape& b)const{return device==b.device&&queue==b.queue&&width==b.width&&height==b.height&&feature==b.feature&&before==b.before&&modelRevision==b.modelRevision&&modelGraph==b.modelGraph;}
 };
 struct Flight {
     std::unique_ptr<Commands> ingress,egress;
@@ -93,10 +76,13 @@ struct Owner {
             wstring_to_string(dll));return false;}
         auto get=reinterpret_cast<NrSubmissionApi::GetApi>(GetProcAddress(module,"DlssNrHipBackendGetScheduledApiV2"));
         if(!get){failureReason="HIP companion API is missing";return false;}
-        // Prefer the accepted research checkpoint, retaining the released
-        // companion as an explicit fallback for existing installations.
-        auto profile=NrExecution::OptimizedCheckpointId;
+        // Prefer the combined A/B executor. Older companions remain usable for A.
+        auto profile=NrExecution::ModelABProfileId;
         auto status=get(profile,NrSubmissionApi::Version,&api,sizeof(api));
+        if(status==Status::Unsupported){
+            profile=NrExecution::OptimizedCheckpointId;
+            status=get(profile,NrSubmissionApi::Version,&api,sizeof(api));
+        }
         if(status==Status::Unsupported){
             profile=NrExecution::AcceptedMixedId;
             status=get(profile,NrSubmissionApi::Version,&api,sizeof(api));
@@ -104,27 +90,44 @@ struct Owner {
         if(status!=Status::Ok){
             failureReason="HIP companion execution profile is incompatible";
             LOG_ERROR("Native NR companion execution profile is incompatible");return false;}
-        LOG_INFO("Native NR executor: {}",profile==NrExecution::OptimizedCheckpointId?
+        // HIP registers GPU code at module load. Keep that registration alive
+        // across resizes instead of unloading/reinitializing HIP inside a game.
+        // Per-session GPU resources are still drained and destroyed in Close.
+        HMODULE pinned=nullptr;
+        if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,
+                              reinterpret_cast<LPCWSTR>(get),&pinned)){
+            failureReason="Could not retain the HIP companion for this process";return false;}
+        using SetLogSink=void (__cdecl*)(void (__cdecl*)(const char*));
+        if(auto setLog=reinterpret_cast<SetLogSink>(GetProcAddress(module,"DlssNrHipBackendSetLogSink")))setLog(RuntimeLog);
+        LOG_INFO("Native NR executor: {}",profile==NrExecution::ModelABProfileId?NrExecution::ModelABProfileName:profile==NrExecution::OptimizedCheckpointId?
             NrExecution::OptimizedCheckpointName:NrExecution::AcceptedMixedName);
+        LOG_INFO("Native NR creating runtime for {}x{} on queue {}",shape.width,shape.height,static_cast<void*>(shape.queue.Get()));
         if(api.create(shape.device.Get(),shape.queue.Get(),&runtime)!=Status::Ok){
             failureReason="HIP runtime could not start on the selected device or queue";
             LOG_ERROR("Native NR HIP runtime could not start on the selected device/queue");return false;}
+        LOG_INFO("Native NR runtime created; reading model package");
         std::ifstream input(std::filesystem::path(weights),std::ios::binary|std::ios::ate);
         if(!input){failureReason="Model package missing or unreadable: "+wstring_to_string(weights);
             LOG_ERROR("Native NR model package missing or unreadable: {}",wstring_to_string(weights));return false;}
         const auto size=input.tellg();
-        if(size!=AcceptedModelBytes){failureReason="Model package size invalid for mixed-v5";
-            LOG_ERROR("Native NR model package size invalid: {}",wstring_to_string(weights));return false;}
+        if(size<128||size>512ll*1024*1024){failureReason="Model package size is outside the supported range";return false;}
+        std::array<unsigned char,128> header{};input.seekg(0);input.read(reinterpret_cast<char*>(header.data()),header.size());
+        const auto* identity=NrModel::Identify(header.data(),static_cast<std::uint64_t>(size));
+        if(!identity||identity->graph!=shape.modelGraph){failureReason="Model package header does not match the selected A/B model";return false;}
+        if(identity->graph==2&&profile!=NrExecution::ModelABProfileId){failureReason="Model B needs the A/B HIP companion from this build";return false;}
+        input.clear();
         std::vector<unsigned char> package(static_cast<std::size_t>(size));input.seekg(0);
         if(!input.read(reinterpret_cast<char*>(package.data()),size)){
             failureReason="Model package read failed";
             LOG_ERROR("Native NR model package read failed: {}",wstring_to_string(weights));return false;}
         NrV3::Config config{};config.prefix={sizeof(config),NrV3::Version};
-        config.sourceHash=Hash("E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E");
-        config.packageHash=Hash("A7E6EE38172A81E12D613FA9A2F57E32AA1944908E56CD2A33E1F6C94369E3CB");
-        config.graphVersion=1;config.mathContract=NrV2::MathContract;
+        config.sourceHash=Hash(identity->sourceHash);
+        config.packageHash=Hash(identity->packageHash);
+        config.graphVersion=identity->graph;config.mathContract=NrV2::MathContract;
         config.logicalWidth=shape.width;config.logicalHeight=shape.height;
-        config.networkWidth=NrV2::AlignNetworkExtent(shape.width);config.networkHeight=NrV2::AlignNetworkExtent(shape.height);
+        const auto extent=NrModel::WorkingExtent(identity->graph,shape.width,shape.height);
+        config.networkWidth=extent.width;config.networkHeight=extent.height;
+        LOG_INFO("Native NR model {}: {}x{} (network {}x{})",identity->graph==2?"B balanced mixed":"A release mixed",shape.width,shape.height,extent.width,extent.height);
         const auto modelStatus=api.configure(runtime,&config,sizeof(config),package.data(),package.size());
         if(modelStatus!=Status::Ok){failureReason=modelStatus==Status::Failed?
             "Model validation or GPU memory setup failed; check runtime log":
@@ -140,6 +143,7 @@ struct Owner {
     bool Close(){
         NativeHooks::OriginScope privateCalls(NativeHooks::Origin::Private);
         if(runtime){
+            LOG_INFO("Native NR draining {}x{}",shape.width,shape.height);
             if(fault||api.beginDrain(runtime)!=Status::Ok)return false;
             const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(10);
             for(;;){
@@ -151,10 +155,9 @@ struct Owner {
                 Sleep(1);
             }
             if(api.destroy(&runtime)!=Status::Ok)return false;
+            LOG_INFO("Native NR session destroyed; companion remains loaded");
         }
         if(module){FreeLibrary(module);module=nullptr;}
-        if(CpuTraceEnabled()&&shadowPool)LOG_INFO("NativeCPU shadow created={} reused={}",
-            shadowPool->created.load(),shadowPool->reused.load());
         return true;
     }
 };
@@ -163,6 +166,7 @@ struct Session {
     std::shared_ptr<Owner> owner;
     std::unique_ptr<Shape> desired;
     std::wstring dll,package;
+    std::uint64_t assetRevision=0;unsigned assetGraph=1;
     std::shared_ptr<Owner> quarantine;
     bool workerStarted=false,request=false,working=false,failed=false;
     std::string failureReason;
@@ -172,8 +176,7 @@ struct Session {
 };
 Session& Get(){static auto* session=new Session;return *session;}
 #ifdef NR_NATIVE_TEST_HOOKS
-// Only the separately compiled diagnostic host defines this macro. The
-// OptiScaler release DLL has neither a failure switch nor this export.
+// Failure injection is a standalone regression seam, absent from release DLLs.
 std::atomic<unsigned> testFailure{0};
 extern "C" __declspec(dllexport) void DlssNrNativeTestFailure(unsigned value){testFailure=value;}
 #endif
@@ -197,7 +200,9 @@ void Worker(){
         std::shared_ptr<Owner> created;
         if(good&&desired){
             created=std::make_shared<Owner>();created->shape=*desired;
-            try{good=created->Prepare(dll,package);}catch(...){good=false;}
+            try{good=created->Prepare(dll,package);}
+            catch(const std::exception& error){created->failureReason=error.what();good=false;}
+            catch(...){created->failureReason="Unknown exception during HIP session preparation";good=false;}
             if(!good){try{if(!created->Close())created->fault=true;}catch(...){created->fault=true;}}
         }
         {std::lock_guard lock(s.mutex);s.working=false;
@@ -209,9 +214,9 @@ void Worker(){
                 s.failed=true;s.pending=0;
                 s.failureReason=created&&!created->failureReason.empty()?created->failureReason:
                     "HIP session warmup or drain failed";
-                LOG_ERROR("Native NR warmup/drain failed; original submissions remain active");
+                LOG_ERROR("Native NR warmup/drain failed: {}; original submissions remain active",s.failureReason);
             }else{
-                s.failureReason.clear();s.lastOutcome=0;
+                s.failed=false;s.failureReason.clear();s.lastOutcome=0;
                 s.owner=std::move(created);s.ready=s.owner&&!s.request?1:0;s.pending=s.owner||s.request?1:0;
                 if(s.owner)LOG_INFO("Native NR ready on observed queue: {}x{}",s.owner->shape.width,s.owner->shape.height);
             }
@@ -219,10 +224,19 @@ void Worker(){
     }
 }
 }
-void SetAssetPaths(std::wstring dll,std::wstring package){
-    auto& s=Get();std::lock_guard lock(s.mutex);s.dll=std::move(dll);s.package=std::move(package);
+void SetAssetPaths(std::wstring dll,std::wstring package,unsigned graph){
+    auto& s=Get();std::lock_guard lock(s.mutex);
+    if(s.quarantine)return; // A device/submission fault still requires a fresh process.
+    if(s.dll==dll&&s.package==package&&s.assetGraph==graph&&s.workerStarted)return;
+    s.dll=std::move(dll);s.package=std::move(package);s.assetGraph=graph;++s.assetRevision;++s.discontinuity;
+    // A model change retires the previous owner before uploading new weights.
+    // Recorded frames carry the revision so they cannot consume another model.
+    s.desired.reset();s.request=true;s.ready=0;s.pending=1;
+    if(!s.quarantine){s.failed=false;s.failureReason.clear();}
     if(!s.workerStarted){s.workerStarted=true;std::thread(Worker).detach();}
+    s.condition.notify_one();
 }
+std::uint64_t AssetRevision()noexcept{auto& s=Get();std::lock_guard lock(s.mutex);return s.assetRevision;}
 void HistoryDiscontinuity()noexcept{++Get().discontinuity;}
 std::uint64_t AppliedFrames()noexcept{return Get().applied.load();}
 std::uint64_t BypassedFrames()noexcept{return Get().raw.load();}
@@ -238,14 +252,14 @@ bool SessionReadyFor(ID3D12Device* device,ID3D12CommandQueue* queue,unsigned wid
     if(!s.owner||!s.ready.load()||s.request||s.working||s.owner->fault)return false;
     const auto& shape=s.owner->shape;
     return shape.device.Get()==device&&(!queue||shape.queue.Get()==queue)&&shape.width==width&&
-           shape.height==height&&shape.feature==feature&&shape.before==before;
+           shape.height==height&&shape.feature==feature&&shape.before==before&&shape.modelRevision==s.assetRevision;
 }
 bool WarmSession(ID3D12Device* device,ID3D12CommandQueue* queue,unsigned width,unsigned height,
                  std::uint64_t feature,bool before)noexcept{
     try{
         auto& s=Get();std::unique_lock lock(s.mutex);
         if(!s.workerStarted||s.failed)return false;
-        Shape shape{device,queue,width,height,feature,before};
+        Shape shape{device,queue,width,height,feature,before,s.assetRevision,s.assetGraph};
         if(!s.desired||!s.desired->Same(shape)){
             s.desired=std::make_unique<Shape>(shape);s.request=true;s.pending=1;s.ready=0;s.condition.notify_one();
         }
@@ -258,7 +272,6 @@ bool WarmSession(ID3D12Device* device,ID3D12CommandQueue* queue,unsigned width,u
     }catch(...){return false;}
 }
 void StopSession(std::uint64_t feature)noexcept{
-    if(CpuTraceEnabled())TraceTotals().Report();
     auto& s=Get();std::lock_guard lock(s.mutex);
     if(!s.workerStarted)return;
     if(feature&&(!s.desired||s.desired->feature!=feature)&&(!s.owner||s.owner->shape.feature!=feature))return;
@@ -271,52 +284,39 @@ extern "C" __declspec(dllexport) UINT64 DlssNrNativeApplied(){return Get().appli
 
 NativeQueue::Result NativeBatch::Submit(ID3D12CommandQueue* queue,UINT count,
     ID3D12CommandList* const* lists,NativeQueue::Execute execute)noexcept {
-    const bool trace=CpuTraceEnabled();std::array<CpuClock::time_point,10> times{};
-    if(trace)times[0]=CpuClock::now();
     auto& session=Get();
-    // A warm runtime says nothing about whether any game submission actually
-    // reached it. Report each distinct bypass cause a few times so the game
-    // log can separate a recorded pass from a raw upscaler submission.
-    enum class Bypass : unsigned { Reused, LockBusy, Invalid, RuntimePending, PollFailed, FlightsBusy, WarmOnly, Count };
-    static std::array<std::atomic<unsigned>,static_cast<unsigned>(Bypass::Count)> bypassReports{};
-    auto raw=[&](Bypass cause){
-        const auto count=++session.raw;
+    auto raw=[&](){
+        ++session.raw;
         ++session.discontinuity;
         session.lastOutcome=2;
         // The codec may already have recorded transitions on a private list.
         // A raw game submission discards that list, so retire its CPU-side
         // scratch-state assumptions before another frame can record.
         if(intent&&intent->frontend)DlssNr::RetryAfterFailure();
-        const auto n=++bypassReports[static_cast<unsigned>(cause)];
-        static constexpr const char* labels[]={"reused list", "queue lock busy", "invalid recording or feature",
-            "runtime pending or shape changed", "runtime poll failed", "all flights busy", "warmup-only frame"};
-        if(n<=3)LOG_INFO("Native NR bypass #{}: {} (ready={}, applied={})",count,
-            labels[static_cast<unsigned>(cause)],session.ready.load(),session.applied.load());
         return NativeQueue::Result::Unclaimed;
     };
     // Consume even a bypassed generation: a later resubmission must never be
     // reinterpreted as a new frame merely because warmup has since completed.
     const bool usable=recording&&recording->Ready();
-    if(recording&&recording->submitted.exchange(true))return raw(Bypass::Reused);
+    if(recording&&recording->submitted.exchange(true))return raw();
     std::unique_lock lock(session.mutex,std::try_to_lock);
-    if(!lock.owns_lock())return raw(Bypass::LockBusy);
-    if(repeated||!usable||!intent||!intent->featureLive||!intent->featureLive->load()||session.failed)
-        return raw(Bypass::Invalid);
-    Shape shape{recording->device,queue,intent->width,intent->height,intent->feature,intent->before};
+    if(!lock.owns_lock())return raw();
+    if(repeated||!usable||!intent||intent->modelRevision!=session.assetRevision||!intent->featureLive||!intent->featureLive->load()||session.failed)
+        return raw();
+    Shape shape{recording->device,queue,intent->width,intent->height,intent->feature,intent->before,intent->modelRevision,session.assetGraph};
     if(!session.owner||!session.owner->shape.Same(shape)||session.request||session.working){
         if(!session.desired||!session.desired->Same(shape)){
-            try{session.desired=std::make_unique<Shape>(shape);}catch(...){return raw(Bypass::RuntimePending);}
+            try{session.desired=std::make_unique<Shape>(shape);}catch(...){return raw();}
             session.request=true;session.pending=1;session.ready=0;
             session.condition.notify_one();
         }
-        return raw(Bypass::RuntimePending);
+        return raw();
     }
-    if(intent->warmOnly)return raw(Bypass::WarmOnly);
+    if(intent->warmOnly)return raw();
     auto owner=session.owner;auto& p=*owner;
-    if(p.fault||!p.Poll()){RetainFault(session,owner);return raw(Bypass::PollFailed);}
+    if(p.fault||!p.Poll()){RetainFault(session,owner);return raw();}
     Flight* flight=nullptr;for(auto& f:p.flights)if(!f.recording&&!f.tokenLive){flight=&f;break;}
-    if(!flight)return raw(Bypass::FlightsBusy);
-    if(trace)times[1]=CpuClock::now();
+    if(!flight)return raw();
     auto& f=*flight;bool prefixSubmitted=false,waitAttempted=false,recorded=false;
 #ifdef NR_NATIVE_TEST_HOOKS
     const auto injection=testFailure.exchange(0);
@@ -345,9 +345,7 @@ NativeQueue::Result NativeBatch::Submit(ID3D12CommandQueue* queue,UINT count,
         input.resetReasons=(v.reset||p.discontinuity!=discontinuity||v.sourceFrame!=p.lastFrame+1||
             v.temporalAccumulation!=p.temporalAccumulation)?NrV2::Explicit:0;
         NrV3::RecordResult result{};
-        if(trace)times[2]=CpuClock::now();
         const auto status=p.api.recordInput(p.runtime,&input,sizeof(input),&result,sizeof(result));
-        if(trace)times[3]=CpuClock::now();
         recorded=result.recorded!=0;f.token=result.token;f.tokenLive=recorded;
         if(status!=Status::Ok||!recorded)
             throw std::runtime_error("record input status "+std::to_string(static_cast<unsigned>(status)));
@@ -381,14 +379,10 @@ NativeQueue::Result NativeBatch::Submit(ID3D12CommandQueue* queue,UINT count,
         after.push_back(recording->suffix->list.Get());
         after.insert(after.end(),lists+markerIndex+1,lists+count);
         f.recording=recording;f.intent=intent;recording->submitted=true;
-        if(trace)times[4]=CpuClock::now();
         execute(queue,static_cast<UINT>(before.size()),before.data());prefixSubmitted=true;
-        if(trace)times[5]=CpuClock::now();
         const auto token=Request(f.token);
         const bool notifyOk=p.api.notifyInputSubmitted(p.runtime,&token,sizeof(token))==Status::Ok;
-        if(trace)times[6]=CpuClock::now();
         const bool enqueueOk=notifyOk&&injection!=3&&p.api.enqueue(p.runtime,&token,sizeof(token))==Status::Ok;
-        if(trace)times[7]=CpuClock::now();
         if(!notifyOk||!enqueueOk||injection==4){
             if(SUCCEEDED(p.shape.device->GetDeviceRemovedReason())){
                 // A common-color prefix may have transitioned game resources.
@@ -406,27 +400,26 @@ NativeQueue::Result NativeBatch::Submit(ID3D12CommandQueue* queue,UINT count,
         waitAttempted=true;
         if(p.api.armOutput(p.runtime,&token,sizeof(token))!=Status::Ok)throw std::runtime_error("arm output");
         if(injection==5)throw std::runtime_error("diagnostic after accepted wait");
-        if(trace)times[8]=CpuClock::now();
         execute(queue,static_cast<UINT>(after.size()),after.data());
         if(injection==6)throw std::runtime_error("diagnostic after output publication");
         if(p.api.notifyOutputSubmitted(p.runtime,&token,sizeof(token))!=Status::Ok)throw std::runtime_error("output submit");
         f.retire=++p.serial;Check(queue->Signal(p.fence.Get(),f.retire));
-        if(trace){times[9]=CpuClock::now();TraceTotals().Add(times);}
         p.discontinuity=discontinuity;p.lastFrame=v.sourceFrame;
         p.temporalAccumulation=v.temporalAccumulation;
         p.jitterX=v.motionParameters.currentJitterX;p.jitterY=v.motionParameters.currentJitterY;
-        ++session.applied;session.lastOutcome=1;return NativeQueue::Result::Submitted;
+        ++session.applied;session.lastOutcome=1;
+        return NativeQueue::Result::Submitted;
     }catch(const std::exception& error){
         static std::atomic<unsigned> warnings{0};
         if(warnings++<8)LOG_WARN("Native NR submission failed at {} (prefix={}, wait={})",error.what(),prefixSubmitted,waitAttempted);
         if(prefixSubmitted||waitAttempted){RetainFault(session,owner);return NativeQueue::Result::Quarantined;}
         if(recorded){auto token=Request(f.token);
-            if(p.api.drop(p.runtime,&token,sizeof(token))!=Status::Ok){RetainFault(session,owner);return raw(Bypass::PollFailed);}
+            if(p.api.drop(p.runtime,&token,sizeof(token))!=Status::Ok){RetainFault(session,owner);return raw();}
             f.tokenLive=false;}
         // Neither list was submitted; close/discard before its allocator is reused.
         f.ingress->list->Close();f.egress->list->Close();
         if(!p.Poll())RetainFault(session,owner);
-        return raw(Bypass::Invalid);
+        return raw();
     }
 }
 } // namespace DlssNr::Native

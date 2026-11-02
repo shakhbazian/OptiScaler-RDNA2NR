@@ -96,6 +96,7 @@ float3 NrReconstructModel(float3 base, float2 uv, float3 carrier)
 {
     bool dlss = gTransfer == 4;
     float3 field = dlss ? NrDecodeResizeField(NrBoundResizeCarrier(uv, carrier)) : NrSampleResizeField(uv, false);
+    if (all(field == 0.0)) return base;
     float3 result = NrRestoreResizeField(base, field);
     if (dlss && gPassthrough == 0 && (gReversibleMode == 2 || gReversibleMode == 4))
     {

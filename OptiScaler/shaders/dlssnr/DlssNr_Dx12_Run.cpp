@@ -1,5 +1,6 @@
 #include "pch.h"
 #include <dlssnr/WorkingResolution.h>
+#include <dlssnr/ModelGuideContract.h>
 #include "DlssNr_Dx12_State.h"
 #include <dlssnr/NrBackendSelection.h>
 #include <dlssnr/native/NativeAdapter.h>
@@ -30,7 +31,7 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
         return;
     }
     lifetime.Record(cmdList);
-    ScopedNrStateEnvelope stateEnvelope(cmdList);
+    ScopedNrStateEnvelope stateEnvelope(cmdList, !frame.IndependentCommands);
 
     // A completed upscaler output normally arrives as a UAV. The pre-SR colour input instead arrives
     // readable. Track every transition so both paths return the resource exactly as their caller gave
@@ -224,19 +225,9 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
         return;
     }
 
-    // Advance capture scheduling only once the codec and models are ready.
     ++frames;
     lifetime.Collect();
-    CheckCaptureTrigger();
 
-    if (captureFrames.isActive())
-    {
-        const auto captureDir = Util::DllPath().remove_filename() / "dlssnr-capture";
-        const auto written = captureFrames.write(captureDir);
-
-        if (!written.empty())
-            LOG_INFO("DLSS-NR wrote matched before/after frames to {}", written);
-    }
 
     ResTrack_Dx12::HookLateNrQueue(device);
     if (gpuTime == nullptr)
@@ -364,9 +355,60 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
         motionIn = nr.spatialMotion;
     }
 
-    // The vectors were scaled to full-frame pixels; the image the model reprojects is the working size.
-    const float mvToWorkX = width != 0 ? (float) workWidth / (float) width : 1.0f;
-    const float mvToWorkY = height != 0 ? (float) workHeight / (float) height : 1.0f;
+    // NGX gets guides on its model grid. HIP retains its existing motion reducer.
+    bool matchedGuides = false;
+    if (!hip && reduced && !spatial && workWidth < width && cfg.DlssNrMatchGuides.value_or_default())
+    {
+        if (nr.depthSmall == nullptr)
+            nr.depthSmall = CreateScratch(device, DXGI_FORMAT_R32_FLOAT, workWidth, workHeight);
+        if (nr.motionSmall == nullptr)
+            nr.motionSmall = CreateScratch(device, DXGI_FORMAT_R32G32_FLOAT, workWidth, workHeight);
+        if (nr.depthSmall != nullptr && nr.motionSmall != nullptr)
+        {
+            DlssNrConstants resize {};
+            resize.Mode = DlssNrMode_ResizePrivateGuides;
+            resize.Width = workWidth;
+            resize.Height = workHeight;
+            resize.GuideWidth = guides.depth.width;
+            resize.GuideHeight = guides.depth.height;
+            resize.DebugView = guides.depth.x;
+            resize.CompareMode = guides.depth.y;
+            resize.TransferStrength = float(guides.motion.width);
+            resize.ColourStrength = float(guides.motion.height);
+            resize.CompareSwap = guides.motion.x;
+            resize.Transfer = guides.motion.y;
+            resize.MvScaleX = resize.MvScaleY = 1.0f;
+            if (shader.DispatchPass(cmdList, resize, depthIn, motionIn, nullptr, nullptr, nullptr, nr.depthSmall,
+                                    nr.motionSmall))
+            {
+                Barrier(cmdList, nr.depthSmall, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                Barrier(cmdList, nr.motionSmall, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                depthIn = nr.depthSmall;
+                motionIn = nr.motionSmall;
+                matchedGuides = true;
+            }
+        }
+
+    }
+
+    const bool renderMotionScale = !hip && cfg.DlssNrRenderMotionScale.value_or_default();
+    const auto motionUnits = DlssNr::MotionFactors({{width,height},{workWidth,workHeight},
+        {guides.motion.width,guides.motion.height},{frame.RenderSubrectWidth,frame.RenderSubrectHeight},
+        {frame.OutputWidth,frame.OutputHeight},frame.MotionVectorsLowResolution,matchedGuides,renderMotionScale});
+    const float mvToWorkX = motionUnits.x, mvToWorkY = motionUnits.y;
+    if (!hip)
+    {
+        const std::array<unsigned,14> contract{guides.depth.x,guides.depth.y,guides.depth.width,guides.depth.height,
+            guides.motion.x,guides.motion.y,guides.motion.width,guides.motion.height,
+            motionUnits.reference.width,motionUnits.reference.height,workWidth,workHeight,
+            matchedGuides?1u:0u,spatial?1u:renderMotionScale?2u:0u};
+        const std::array<float,2> scale{spatial?1.f:frame.MvScaleX*mvToWorkX,spatial?1.f:frame.MvScaleY*mvToWorkY};
+        // A live handle's history belongs to a particular guide grid and units.
+        nr.reset |= !nr.guideContractValid || nr.guideContract != contract || nr.guideMotionScale != scale;
+        nr.guideContractValid = true;nr.guideContract = contract;nr.guideMotionScale = scale;
+    }
 
     ngxTime->Start(cmdList);
 
@@ -435,9 +477,9 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
     modelFrame.depth = depthIn;
     modelFrame.motion = motionIn;
     modelFrame.size = { modelWidth, modelHeight };
-    modelFrame.guides =
-        spatial ? DlssNr::GuideRegions { { 0, 0, modelWidth, modelHeight }, { 0, 0, modelWidth, modelHeight } }
-                : guides;
+    modelFrame.guides = (spatial || matchedGuides)
+                            ? DlssNr::GuideRegions { { 0, 0, modelWidth, modelHeight }, { 0, 0, modelWidth, modelHeight } }
+                            : guides;
     modelFrame.depthInverted = frame.DepthInverted;
     modelFrame.reset = nr.reset;
     modelFrame.mvScaleX = spatial ? 1.0f : frame.MvScaleX * mvToWorkX;
@@ -508,6 +550,27 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
     }
 
     ngxTime->End(cmdList);
+
+    // The last model has finished reading passClamp. Reuse it for the final
+    // chain's halo correction; the base proxy and all model histories stay intact.
+    if (result == NVSDK_NGX_Result_Success && finalAnswer && nr.passClamp && DlssNr_Common::HaloEnabled(cfg) &&
+        cfg.DlssNrDebugView.value_or_default() != 2)
+    {
+        MakeModelWritable(nr.passClamp);
+        DlssNrConstants halo {};
+        halo.Mode = DlssNrMode_SuppressHalo;
+        halo.Width = modelWidth;
+        halo.Height = modelHeight;
+        DlssNr_Common::SetQualityConstants(halo, cfg);
+        if (shader.DispatchPass(cmdList, halo, modelInput, finalAnswer, nullptr, nullptr, nullptr, nr.passClamp,
+                                nullptr))
+        {
+            finalAnswer = nr.passClamp;
+            MakeModelReadable(finalAnswer);
+        }
+        else
+            ReportSkipOnce("halo filter dispatch failed; using the unfiltered model answer");
+    }
 
     nr.reset = clampFailed || finalAnswer == nullptr;
     bool spatialUnpacked = false;
@@ -710,12 +773,6 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         }
 
-        // Schedule matched proxy/output capture for delayed readback.
-        if (captureFrames.isActive())
-        {
-            captureFrames.record(cmdList, device, nr.colorCopy, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, target,
-                                 targetState);
-        }
     }
     else if (result != NVSDK_NGX_Result_Success)
     {
@@ -758,6 +815,15 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
             for (auto* unpacked : { nr.spatialProxy, nr.spatialAnswer })
                 Barrier(cmdList, unpacked, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
+    // The matched guides were written this frame and read by the model; back to UAV for the next.
+    if (matchedGuides)
+    {
+        Barrier(cmdList, nr.depthSmall, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Barrier(cmdList, nr.motionSmall, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 
     // Failed evaluations leave the game's original image intact. A successful copy-back writes

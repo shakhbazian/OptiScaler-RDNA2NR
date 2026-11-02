@@ -38,7 +38,7 @@ struct View
 
 inline const char* SectionName(Section section)
 {
-    static constexpr const char* names[] = { "Placement", "Input", "Model passes", "Apply NR edit" };
+    static constexpr const char* names[] = { "Placement", "Input", "Model", "Apply NR edit" };
     return names[(int) section];
 }
 

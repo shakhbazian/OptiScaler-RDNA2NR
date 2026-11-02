@@ -26,7 +26,7 @@ The AMD backend should be identified as **AMD HIP (gfx1030)**. Auto uses the act
 
 Keep **Apply model** enabled and Transfer/Colour strength above zero. Leave debug/comparison views off when judging the ordinary output. Confirm that the *applied* frame count increases, rather than only a preparation or background counter.
 
-Use a scene where the full model has a visible effect, keep settings consistent, and compare with the master NR switch. Some scenes respond subtly. If the applied counter grows but the expected edit is absent, include a paired screenshot and log in a report.
+Use a scene where NR visibly changes lighting or detail, keep settings consistent, and compare with the master NR switch. If the applied counter grows but the expected edit is absent, include a paired screenshot and log in a report.
 
 ## Missing runtime or model
 
@@ -34,7 +34,7 @@ Use a scene where the full model has a visible effect, keep settings consistent,
 - **`VCRUNTIME140`, `MSVCP140` or similar:** install the [Visual C++ v14 Redistributable, x64](https://aka.ms/vc14/vc_redist.x64.exe).
 - **HIP companion missing:** extract the complete release and reinstall with `Install-RDNA2NR.cmd`. The companion must accompany the frontend.
 - **Source DLL rejected:** compare its SHA-256 with the [supported source](MODEL.md#supported-source). Renaming a different DLL does not make it compatible.
-- **Weight package missing or invalid:** verify the model cache or the absolute `[DlssNr] ModelPath`. Move aside a corrupt cached file and rerun conversion with a verified source. Restart the game afterward.
+- **Weight package missing or invalid:** verify the model cache or the absolute `[DlssNr] ModelPath` (A) or `ModelBPath` (B). Move aside a corrupt cached file and rerun conversion with a verified source. Restart the game afterward.
 
 The current HIP executor does not depend on rocBLAS. A rocBLAS error points to another component, an older package or a different tool; report which executable produced it instead of installing arbitrary libraries.
 
